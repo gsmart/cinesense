@@ -58,6 +58,28 @@ class LookupService:
             raise RuntimeError("TMDB request failed") from exc
         return self._resolved_payload(movie, normalized_title, year, normalized_region, "tmdb")
 
+    def persist_seed_recommendation_candidates(
+        self,
+        *,
+        seed_source_movie_id: str,
+        candidates: list[TmdbCandidate],
+    ) -> list[Movie]:
+        if not candidates:
+            return []
+
+        persisted: list[Movie] = []
+        seen_source_ids: set[str] = set()
+        for candidate in candidates:
+            if len(persisted) >= 20:
+                break
+            if candidate.media_type != "movie":
+                continue
+            if candidate.source_movie_id == seed_source_movie_id or candidate.source_movie_id in seen_source_ids:
+                continue
+            seen_source_ids.add(candidate.source_movie_id)
+            persisted.append(self._upsert_tmdb_recommendation_candidate(candidate))
+        return persisted
+
     def _find_local_matches(self, normalized_title: str, year: int | None, media_type: str) -> list[Movie]:
         stmt: Select[tuple[Movie]] = (
             select(Movie)
@@ -98,12 +120,7 @@ class LookupService:
         return matches
 
     async def _upsert_tmdb_movie(self, candidate: TmdbCandidate, region: str | None) -> Movie:
-        existing = self.db.scalar(
-            select(Movie)
-            .join(ExternalId)
-            .options(joinedload(Movie.aliases), joinedload(Movie.external_ids), joinedload(Movie.observations))
-            .where(ExternalId.source == "tmdb", ExternalId.source_movie_id == candidate.source_movie_id)
-        )
+        existing = self._find_tmdb_movie_by_source_id(candidate.source_movie_id)
         if existing and self._movie_state(existing) in {FreshnessState.FRESH, FreshnessState.STALE_USABLE}:
             return existing
 
@@ -137,17 +154,62 @@ class LookupService:
             self.db.commit()
         except IntegrityError:
             self.db.rollback()
-            recovered = self.db.scalar(
-                select(Movie)
-                .join(ExternalId)
-                .options(joinedload(Movie.aliases), joinedload(Movie.external_ids), joinedload(Movie.observations))
-                .where(ExternalId.source == "tmdb", ExternalId.source_movie_id == candidate.source_movie_id)
-            )
+            recovered = self._find_tmdb_movie_by_source_id(candidate.source_movie_id)
             if recovered is None:
                 raise
             return recovered
         self.db.refresh(existing)
         return existing
+
+    def _upsert_tmdb_recommendation_candidate(self, candidate: TmdbCandidate) -> Movie:
+        existing = self._find_tmdb_movie_by_source_id(candidate.source_movie_id)
+        if existing is None:
+            existing = Movie(
+                canonical_title=candidate.title,
+                normalized_title=candidate.normalized_title,
+                release_year=candidate.release_year,
+                media_type="movie",
+                original_language=candidate.original_language,
+                overview=candidate.overview,
+                runtime_minutes=None,
+                poster_url=self._candidate_poster_url(candidate),
+            )
+            self.db.add(existing)
+            self.db.flush()
+
+        existing.canonical_title = candidate.title
+        existing.normalized_title = candidate.normalized_title
+        existing.release_year = candidate.release_year
+        existing.media_type = "movie"
+        existing.original_language = candidate.original_language
+        existing.overview = candidate.overview
+        existing.poster_url = self._candidate_poster_url(candidate)
+        self._merge_aliases(existing, [candidate.title])
+        self._merge_candidate_external_id(existing, candidate)
+
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            recovered = self._find_tmdb_movie_by_source_id(candidate.source_movie_id)
+            if recovered is None:
+                raise
+            return recovered
+        self.db.refresh(existing)
+        return existing
+
+    def _find_tmdb_movie_by_source_id(self, source_movie_id: str) -> Movie | None:
+        return self.db.scalar(
+            select(Movie)
+            .join(ExternalId)
+            .options(joinedload(Movie.aliases), joinedload(Movie.external_ids), joinedload(Movie.observations))
+            .where(ExternalId.source == "tmdb", ExternalId.source_movie_id == source_movie_id)
+        )
+
+    def _candidate_poster_url(self, candidate: TmdbCandidate) -> str | None:
+        if not candidate.poster_path:
+            return None
+        return f"{settings.base_image_url}{candidate.poster_path}"
 
     def _merge_aliases(self, movie: Movie, aliases: list[str]) -> None:
         known = {alias.normalized_alias for alias in movie.aliases}
@@ -171,6 +233,24 @@ class LookupService:
                 source_movie_id=bundle.source_movie_id,
                 media_type="movie",
                 source_url=bundle.source_url,
+                first_seen_at=now,
+                last_seen_at=now,
+            )
+        )
+
+    def _merge_candidate_external_id(self, movie: Movie, candidate: TmdbCandidate) -> None:
+        now = datetime.now(UTC)
+        for external in movie.external_ids:
+            if external.source == "tmdb" and external.source_movie_id == candidate.source_movie_id:
+                external.source_url = candidate.source_url
+                external.last_seen_at = now
+                return
+        movie.external_ids.append(
+            ExternalId(
+                source="tmdb",
+                source_movie_id=candidate.source_movie_id,
+                media_type="movie",
+                source_url=candidate.source_url,
                 first_seen_at=now,
                 last_seen_at=now,
             )
