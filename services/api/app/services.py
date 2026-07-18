@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 import httpx
 from sqlalchemy import Select, select
@@ -57,6 +58,69 @@ class LookupService:
         except httpx.HTTPError as exc:
             raise RuntimeError("TMDB request failed") from exc
         return self._resolved_payload(movie, normalized_title, year, normalized_region, "tmdb")
+
+    async def recommend_from_seed_movie(
+        self,
+        *,
+        seed_movie_id: str,
+        region: str | None = None,
+        limit: int = 20,
+    ) -> dict:
+        seed = self._find_movie_by_id(seed_movie_id)
+        normalized_region = normalize_region(region)
+        constrained_limit = min(max(limit, 1), 20)
+
+        if seed is None:
+            return {
+                "status": "seed_not_found",
+                "seed": None,
+                "region": normalized_region,
+                "limit": constrained_limit,
+                "results": [],
+            }
+        if seed.media_type != "movie":
+            return {
+                "status": "unsupported_media_type",
+                "seed": self._seed_payload(seed),
+                "region": normalized_region,
+                "limit": constrained_limit,
+                "results": [],
+            }
+
+        external = next(
+            (item for item in seed.external_ids if item.source == "tmdb" and item.media_type == "movie"),
+            None,
+        )
+        if external is None:
+            return {
+                "status": "missing_external_id",
+                "seed": self._seed_payload(seed),
+                "region": normalized_region,
+                "limit": constrained_limit,
+                "results": [],
+            }
+
+        try:
+            candidates = await self.tmdb.get_seed_recommendations(
+                external.source_movie_id,
+                constrained_limit,
+                region=normalized_region,
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError("TMDB request failed") from exc
+
+        persisted = self.persist_seed_recommendation_candidates(
+            seed_source_movie_id=external.source_movie_id,
+            candidates=candidates,
+        )
+        ranked = self.rank_seed_recommendation_candidates(persisted)[:constrained_limit]
+        return {
+            "status": "ok",
+            "seed": self._seed_payload(seed),
+            "region": normalized_region,
+            "limit": constrained_limit,
+            "results": ranked,
+        }
 
     def persist_seed_recommendation_candidates(
         self,
@@ -157,6 +221,25 @@ class LookupService:
             stmt = stmt.where(Movie.release_year == year)
         return list(self.db.scalars(stmt).unique())
 
+    def _find_movie_by_id(self, movie_id: str) -> Movie | None:
+        try:
+            parsed_id = UUID(movie_id)
+        except ValueError:
+            return None
+        return self.db.scalar(
+            select(Movie)
+            .options(joinedload(Movie.aliases), joinedload(Movie.external_ids), joinedload(Movie.observations))
+            .where(Movie.id == parsed_id)
+        )
+
+    def _seed_payload(self, movie: Movie) -> dict:
+        return {
+            "movie_id": str(movie.id),
+            "canonical_title": movie.canonical_title,
+            "release_year": movie.release_year,
+            "media_type": movie.media_type,
+        }
+
     def _movie_state(self, movie: Movie) -> FreshnessState:
         metadata = self._find_observation(movie, "title_metadata")
         if metadata is None:
@@ -174,8 +257,12 @@ class LookupService:
     def _observation_state(self, observation: Observation | None) -> FreshnessState:
         if observation is None:
             return FreshnessState.MISSING
+        now = datetime.now(UTC)
+        if observation.fresh_until is not None and observation.fresh_until.tzinfo is None:
+            now = now.replace(tzinfo=None)
         return evaluate_freshness(
-            FreshnessWindow(observation.fresh_until, observation.stale_until, observation.fetch_status)
+            FreshnessWindow(observation.fresh_until, observation.stale_until, observation.fetch_status),
+            now,
         )
 
     def _filter_candidates(
