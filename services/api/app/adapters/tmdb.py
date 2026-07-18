@@ -18,6 +18,14 @@ class TmdbCandidate:
     release_year: int | None
     original_language: str | None
     popularity: float | None
+    media_type: str = "movie"
+    overview: str | None = None
+    poster_path: str | None = None
+    source_url: str | None = None
+    fetched_at: datetime | None = None
+    fetch_status: str = "SUCCESS"
+    parser_version: str = "tmdb-v1"
+    raw_response_hash: str | None = None
 
 
 @dataclass(slots=True)
@@ -97,6 +105,57 @@ class TmdbAdapter:
                     popularity=result.get("popularity"),
                 )
             )
+        return candidates
+
+    async def get_seed_recommendations(
+        self,
+        source_movie_id: str,
+        limit: int,
+        region: str | None = None,
+    ) -> list[TmdbCandidate]:
+        capped_limit = min(max(limit, 0), 20)
+        if capped_limit == 0:
+            return []
+
+        params: dict[str, str] = {"page": "1"}
+        if region:
+            params["region"] = region
+        payload = await self._get_json(f"/movie/{source_movie_id}/recommendations", params=params)
+
+        fetched_at = datetime.now(UTC)
+        raw_hash = hashlib.sha256(self._last_response_content).hexdigest()
+        seen_ids: set[str] = set()
+        candidates: list[TmdbCandidate] = []
+        for result in payload.get("results", []):
+            candidate_id = str(result.get("id") or "")
+            if not candidate_id or candidate_id == source_movie_id or candidate_id in seen_ids:
+                continue
+            title = result.get("title") or result.get("original_title")
+            if not title:
+                continue
+            release_date = result.get("release_date") or ""
+            release_year = int(release_date[:4]) if len(release_date) >= 4 and release_date[:4].isdigit() else None
+            seen_ids.add(candidate_id)
+            candidates.append(
+                TmdbCandidate(
+                    source_movie_id=candidate_id,
+                    title=title,
+                    normalized_title=normalize_title(title),
+                    release_year=release_year,
+                    media_type="movie",
+                    original_language=result.get("original_language"),
+                    popularity=result.get("popularity"),
+                    overview=result.get("overview"),
+                    poster_path=result.get("poster_path"),
+                    source_url=f"https://www.themoviedb.org/movie/{candidate_id}",
+                    fetched_at=fetched_at,
+                    fetch_status="SUCCESS",
+                    parser_version="tmdb-v1",
+                    raw_response_hash=raw_hash,
+                )
+            )
+            if len(candidates) >= capped_limit:
+                break
         return candidates
 
     async def get_movie_bundle(self, source_movie_id: str, region: str | None) -> TmdbMovieBundle:
