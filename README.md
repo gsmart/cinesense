@@ -2,20 +2,28 @@
 
 Transparent, region-aware movie discovery with deterministic backend ranking and explicit data provenance.
 
-Current status: Phase 1A MVP scaffold and exact-title lookup implementation as of July 18, 2026.
+Current status: Phase 1A exact lookup and Phase 1B seed recommendations are complete as of July 18, 2026.
 
 Implemented now:
 - monorepo layout with `apps/web` and `services/api`
 - FastAPI exact-title lookup endpoint at `POST /api/v1/lookup`
+- FastAPI seed recommendations endpoint at `POST /api/v1/recommendations`
 - PostgreSQL schema and Alembic migration for movies, aliases, external IDs, and observations
 - TMDB-backed provider adapter behind a backend-only token boundary
 - deterministic provisional `cine-score-v1`
-- Next.js UI for lookup, disambiguation, score breakdown, missing signals, provenance, and freshness
+- Next.js UI for lookup, disambiguation, score breakdown, missing signals, provenance, freshness, and on-demand seed recommendations
+
+Verified now:
+- exact lookup, caching, scoring, and disambiguation work
+- seed recommendations work through API and UI
+- recommendations are capped at 20
+- ranking is deterministic with `cine-score-v1`
+- live API and UI verification passed
 
 Not implemented yet:
-- Phase 1B recommendations
 - non-TMDB providers
 - authentication, payments, Redis, Celery, Kafka, Kubernetes, or LLM-authored ranking
+- Phase 2 work; scope must be planned and approved before implementation
 
 Documentation map:
 - `planning.md`: scope, phases, risks, status, open questions
@@ -29,7 +37,8 @@ Documentation map:
 - `code_review.md`: review checklist
 - `docs/plans/phase_1a_exact_lookup.md`: Phase 1A execution plan
 - `docs/plans/phase_1b_seed_recommendations.md`: Phase 1B execution plan
-- `docs/phase_1a_achievement.md`: current phase handoff and next-prompt seed
+- `docs/phase_1a_achievement.md`: Phase 1A closeout
+- `docs/phase_1b_achievement.md`: Phase 1 closeout and Phase 2 planning seed
 - `docs/chatgpt_codex_project_workflow.md`: how to move context between ChatGPT Projects and Codex
 - `docs/decisions/0001_provider_first_ingestion.md`
 - `docs/decisions/0002_field_level_freshness.md`
@@ -52,11 +61,11 @@ Default startup command after implementation:
 - Equivalent npm wrapper: `npm run start:phase-1a`
 - This uses BuildKit/Bake for cached rebuilds, rebuilds only changed layers, starts PostgreSQL, applies the API migration automatically, then runs the API and web app.
 
-What we are building right now:
-- A Phase 1A exact movie-title lookup app.
-- The frontend is a small Next.js form where a user enters title, optional year, and optional region.
-- The backend is a FastAPI service that normalizes the request, checks PostgreSQL first, fetches from TMDB only when needed, persists the canonical movie plus provenance/freshness, and returns a provisional `cine-score-v1`.
-- The current success case is one resolved movie detail card or a disambiguation list for ambiguous titles such as `Crash`.
+What is built now:
+- A Phase 1 exact movie lookup and seed recommendation app.
+- The frontend supports exact lookup first, then on-demand similar-movie retrieval from a resolved seed.
+- The backend normalizes the request, checks PostgreSQL first, fetches from TMDB only when needed, persists canonical movies plus provenance/freshness, ranks recommendation candidates deterministically, and returns `cine-score-v1`.
+- The current success cases are one resolved movie detail card, explicit disambiguation for ambiguous titles such as `Crash`, and up to 20 ranked recommendations in the UI.
 
 How to check frontend and backend as a user:
 1. Create `.env` from `.env.example` and set a real local `TMDB_API_READ_ACCESS_TOKEN`.
