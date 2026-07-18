@@ -59,8 +59,7 @@ def reset_fake_client():
 
 
 def test_get_seed_recommendations_returns_normalized_candidates(monkeypatch):
-    reset_fake_client()
-    FakeAsyncClient.payload = {
+    payload = {
         "results": [
             {
                 "id": 101,
@@ -75,12 +74,12 @@ def test_get_seed_recommendations_returns_normalized_candidates(monkeypatch):
             }
         ]
     }
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json_via_curl", lambda path, *, params=None: payload)
     candidates = asyncio.run(adapter.get_seed_recommendations("550", 5, region="US"))
 
-    assert FakeAsyncClient.seen_params == {"page": "1", "region": "US"}
     assert len(candidates) == 1
     candidate = candidates[0]
     assert candidate.source_movie_id == "101"
@@ -103,16 +102,16 @@ def test_get_seed_recommendations_returns_normalized_candidates(monkeypatch):
 
 
 def test_get_seed_recommendations_caps_limit_at_20(monkeypatch):
-    reset_fake_client()
-    FakeAsyncClient.payload = {
+    payload = {
         "results": [
             {"id": i, "title": f"Movie {i}", "release_date": "2026-01-01", "original_language": "en"}
             for i in range(1, 26)
         ]
     }
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json_via_curl", lambda path, *, params=None: payload)
     candidates = asyncio.run(adapter.get_seed_recommendations("550", 25))
 
     assert len(candidates) == 20
@@ -121,8 +120,7 @@ def test_get_seed_recommendations_caps_limit_at_20(monkeypatch):
 
 
 def test_get_seed_recommendations_deduplicates_and_excludes_seed(monkeypatch):
-    reset_fake_client()
-    FakeAsyncClient.payload = {
+    payload = {
         "results": [
             {"id": 550, "title": "Seed Movie", "release_date": "1999-01-01", "original_language": "en"},
             {"id": 77, "title": "Memento", "release_date": "2000-10-11", "original_language": "en"},
@@ -130,27 +128,26 @@ def test_get_seed_recommendations_deduplicates_and_excludes_seed(monkeypatch):
             {"id": 603, "title": "The Matrix", "release_date": "1999-03-31", "original_language": "en"},
         ]
     }
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json_via_curl", lambda path, *, params=None: payload)
     candidates = asyncio.run(adapter.get_seed_recommendations("550", 10))
 
     assert [candidate.source_movie_id for candidate in candidates] == ["77", "603"]
 
 
 def test_get_seed_recommendations_returns_empty_list_for_empty_results(monkeypatch):
-    reset_fake_client()
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
-
     adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[]}'
+    monkeypatch.setattr(adapter, "_get_json_via_curl", lambda path, *, params=None: {"results": []})
     candidates = asyncio.run(adapter.get_seed_recommendations("550", 10))
 
     assert candidates == []
 
 
 def test_get_seed_recommendations_leaves_missing_rating_fields_as_none(monkeypatch):
-    reset_fake_client()
-    FakeAsyncClient.payload = {
+    payload = {
         "results": [
             {
                 "id": 101,
@@ -161,9 +158,10 @@ def test_get_seed_recommendations_leaves_missing_rating_fields_as_none(monkeypat
             }
         ]
     }
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json_via_curl", lambda path, *, params=None: payload)
     candidate = asyncio.run(adapter.get_seed_recommendations("550", 5))[0]
 
     assert candidate.vote_average is None
@@ -172,8 +170,7 @@ def test_get_seed_recommendations_leaves_missing_rating_fields_as_none(monkeypat
 
 
 def test_get_seed_recommendations_rejects_invalid_rating_values(monkeypatch):
-    reset_fake_client()
-    FakeAsyncClient.payload = {
+    payload = {
         "results": [
             {
                 "id": 101,
@@ -185,9 +182,10 @@ def test_get_seed_recommendations_rejects_invalid_rating_values(monkeypatch):
             }
         ]
     }
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json_via_curl", lambda path, *, params=None: payload)
     candidate = asyncio.run(adapter.get_seed_recommendations("550", 5))[0]
 
     assert candidate.vote_average is None
@@ -201,6 +199,18 @@ def test_get_seed_recommendations_propagates_safe_provider_failure(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     adapter = TmdbAdapter(make_settings(token="super-secret-token"))
+    monkeypatch.setattr(
+        adapter,
+        "_get_json_via_curl",
+        lambda path, *, params=None: (_ for _ in ()).throw(httpx.ConnectError("curl failed")),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_get_json_via_urllib",
+        lambda path, *, params=None, original_error=None: (_ for _ in ()).throw(
+            httpx.ConnectError("urllib failed")
+        ),
+    )
     try:
         asyncio.run(adapter.get_seed_recommendations("550", 10))
     except httpx.ConnectError as exc:
@@ -208,12 +218,45 @@ def test_get_seed_recommendations_propagates_safe_provider_failure(monkeypatch):
     else:
         raise AssertionError("expected ConnectError")
 
-def test_get_seed_recommendations_propagates_safe_http_status_failure(monkeypatch):
+
+def test_get_seed_recommendations_falls_back_to_httpx_after_curl_transport_failure(monkeypatch):
     reset_fake_client()
-    FakeAsyncClient.status_code = 503
+    FakeAsyncClient.payload = {
+        "results": [
+            {
+                "id": 77,
+                "title": "Memento",
+                "release_date": "2000-10-11",
+                "original_language": "en",
+            }
+        ]
+    }
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
+    adapter = TmdbAdapter(make_settings())
+    monkeypatch.setattr(
+        adapter,
+        "_get_json_via_curl",
+        lambda path, *, params=None: (_ for _ in ()).throw(httpx.ConnectError("curl failed")),
+    )
+
+    candidates = asyncio.run(adapter.get_seed_recommendations("550", 5, region="US"))
+
+    assert FakeAsyncClient.seen_params == {"page": "1", "region": "US"}
+    assert [candidate.source_movie_id for candidate in candidates] == ["77"]
+
+
+def test_get_seed_recommendations_propagates_safe_http_status_failure(monkeypatch):
     adapter = TmdbAdapter(make_settings(token="super-secret-token"))
+    request = httpx.Request("GET", "https://api.themoviedb.org/3/movie/550/recommendations")
+    response = httpx.Response(503, request=request)
+    monkeypatch.setattr(
+        adapter,
+        "_get_json_via_curl",
+        lambda path, *, params=None: (_ for _ in ()).throw(
+            httpx.HTTPStatusError("TMDB returned HTTP 503", request=request, response=response)
+        ),
+    )
     try:
         asyncio.run(adapter.get_seed_recommendations("550", 10))
     except httpx.HTTPStatusError as exc:

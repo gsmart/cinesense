@@ -46,6 +46,7 @@ import os
 import time
 
 import httpx
+from app.adapters.tmdb import summarize_tmdb_http_error
 
 token = os.environ.get("TMDB_API_READ_ACCESS_TOKEN", "")
 if not token:
@@ -65,15 +66,18 @@ with httpx.Client(
     for attempt in range(3):
         try:
             response = client.get(
-                "https://api.themoviedb.org/3/search/movie",
-                params={"query": "The Dark Knight", "year": "2008"},
+                "https://api.themoviedb.org/3/movie/155/recommendations",
+                params={"page": "1"},
             )
             if response.status_code == 200:
                 raise SystemExit(0)
-            print(f"TMDB probe status: {response.status_code}")
-            last_error = response.status_code
+            response.raise_for_status()
         except httpx.HTTPError as exc:
-            last_error = exc
+            category, detail = summarize_tmdb_http_error(exc)
+            last_error = f"{category}: {detail}"
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {401, 403}:
+                print(f"TMDB probe auth failure: {detail}")
+                raise SystemExit(1)
         if attempt < 2:
             time.sleep(0.2 * (attempt + 1))
     print(f"TMDB probe failed after retries: {last_error}")
@@ -81,8 +85,9 @@ with httpx.Client(
 PY
 then
   echo "TMDB probe failed."
-  echo "The API container could not complete the known-good TMDB probe."
-  echo "Replace the token, then rerun: ./scripts/start-phase-1a.sh"
+  echo "The API container could not complete the known-good TMDB recommendations probe."
+  echo "Classify the failure above as TLS/network, DNS/connectivity, or auth before changing credentials."
+  echo "Rerun after fixing the reported cause: ./scripts/start-phase-1a.sh"
   exit 1
 fi
 

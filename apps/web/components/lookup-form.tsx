@@ -3,10 +3,48 @@
 import type { CSSProperties, FormEvent } from "react";
 import { useState } from "react";
 
-import { MovieCard } from "@/components/movie-card";
-import type { LookupResponse } from "@/lib/types";
+import { MovieCard, RecommendationsPanel } from "@/components/movie-card";
+import type { LookupResponse, RecommendationsResponse } from "@/lib/types";
 
 const initialResponse: LookupResponse | null = null;
+
+function buildAchievements(
+  response: LookupResponse | null,
+  recommendationStatus: "idle" | "loading" | "error" | "success",
+  recommendations: RecommendationsResponse | null,
+) {
+  const achievements = [
+    { label: "Exact lookup", value: response?.status === "resolved" ? "Working" : "Ready" },
+    {
+      label: "Data source",
+      value:
+        response?.status === "resolved"
+          ? response.source === "local_cache"
+            ? "Warm cache reused"
+            : "Provider fetch stored"
+          : "PostgreSQL first",
+    },
+    {
+      label: "Score engine",
+      value: response?.status === "resolved" ? response.movie?.score.version ?? "cine-score-v1" : "cine-score-v1",
+    },
+    {
+      label: "Recommendations",
+      value:
+        recommendationStatus === "success"
+          ? `${recommendations?.page.returned_count ?? 0} ranked results`
+          : recommendationStatus === "loading"
+            ? "Ranking in progress"
+            : "On demand",
+    },
+  ];
+
+  if (response?.status === "disambiguation") {
+    achievements[0] = { label: "Disambiguation", value: `${response.disambiguation_choices.length} choices` };
+  }
+
+  return achievements;
+}
 
 export function LookupForm() {
   const [title, setTitle] = useState("");
@@ -15,13 +53,20 @@ export function LookupForm() {
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<LookupResponse | null>(initialResponse);
+  const [recommendationStatus, setRecommendationStatus] = useState<"idle" | "loading" | "error" | "success">("idle");
+  const [recommendationError, setRecommendationError] = useState<string | null>(null);
+  const [recommendations, setRecommendations] = useState<RecommendationsResponse | null>(null);
+
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+  const achievements = buildAchievements(response, recommendationStatus, recommendations);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setStatus("loading");
     setError(null);
-
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+    setRecommendationStatus("idle");
+    setRecommendationError(null);
+    setRecommendations(null);
     const payload = {
       title,
       year: year ? Number(year) : null,
@@ -47,6 +92,36 @@ export function LookupForm() {
     setStatus("idle");
   }
 
+  async function fetchRecommendations() {
+    if (response?.status !== "resolved" || !response.movie) {
+      return;
+    }
+
+    setRecommendationStatus("loading");
+    setRecommendationError(null);
+
+    const request = await fetch(`${apiBase}/api/v1/recommendations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        seed_movie_id: response.movie.movie_id,
+        region: region || null,
+        page_size: 20,
+      }),
+    });
+
+    if (!request.ok) {
+      const data = await request.json().catch(() => ({}));
+      setRecommendationStatus("error");
+      setRecommendationError(data.detail ?? "Recommendation request failed");
+      return;
+    }
+
+    const data = (await request.json()) as RecommendationsResponse;
+    setRecommendations(data);
+    setRecommendationStatus("success");
+  }
+
   return (
     <section style={styles.shell}>
       <div style={styles.hero}>
@@ -57,6 +132,21 @@ export function LookupForm() {
           what was fetched, and which signals are still missing.
         </p>
       </div>
+
+      <section style={styles.achievementPanel}>
+        <div style={styles.achievementHeader}>
+          <p style={styles.kicker}>Achievements</p>
+          <p style={styles.achievementCopy}>Surface the system wins directly in the UI, not just in the docs.</p>
+        </div>
+        <div style={styles.achievementGrid}>
+          {achievements.map((achievement) => (
+            <article key={achievement.label} style={styles.achievementCard}>
+              <p style={styles.achievementLabel}>{achievement.label}</p>
+              <strong style={styles.achievementValue}>{achievement.value}</strong>
+            </article>
+          ))}
+        </div>
+      </section>
 
       <form onSubmit={onSubmit} style={styles.form}>
         <label style={styles.field}>
@@ -109,7 +199,21 @@ export function LookupForm() {
         </section>
       ) : null}
 
-      {response?.status === "resolved" && response.movie ? <MovieCard response={response} /> : null}
+      {response?.status === "resolved" && response.movie ? (
+        <>
+          <MovieCard
+            response={response}
+            onFindSimilar={fetchRecommendations}
+            recommendationStatus={recommendationStatus}
+          />
+          <RecommendationsPanel
+            response={recommendations}
+            status={recommendationStatus}
+            error={recommendationError}
+            onRetry={fetchRecommendations}
+          />
+        </>
+      ) : null}
     </section>
   );
 }
@@ -123,6 +227,46 @@ const styles: Record<string, CSSProperties> = {
   },
   hero: {
     padding: "32px 32px 12px",
+  },
+  achievementPanel: {
+    display: "grid",
+    gap: 18,
+    padding: "0 32px",
+  },
+  achievementHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 16,
+    alignItems: "end",
+    flexWrap: "wrap",
+  },
+  achievementCopy: {
+    margin: 0,
+    color: "var(--muted)",
+  },
+  achievementGrid: {
+    display: "grid",
+    gap: 14,
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  },
+  achievementCard: {
+    borderRadius: 22,
+    padding: "18px 20px",
+    background: "linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(248,232,213,0.92) 100%)",
+    border: "1px solid rgba(141,46,22,0.14)",
+    boxShadow: "0 18px 40px rgba(86, 42, 16, 0.08)",
+  },
+  achievementLabel: {
+    margin: 0,
+    color: "var(--accent)",
+    textTransform: "uppercase",
+    letterSpacing: "0.12em",
+    fontSize: 11,
+  },
+  achievementValue: {
+    display: "block",
+    marginTop: 8,
+    fontSize: "clamp(1rem, 2vw, 1.25rem)",
   },
   kicker: {
     margin: 0,

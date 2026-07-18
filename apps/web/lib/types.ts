@@ -58,3 +58,43 @@ export type LookupResponse =
       };
     };
 
+export type RecommendationsResponse = {
+  status: "ok";
+  seed: {
+    movie_id: string;
+    canonical_title: string;
+    release_year: number | null;
+    media_type: string;
+  };
+  region: string | null;
+  limit: number;
+  recommendations: Array<{
+    movie: {
+      movie_id: string;
+      canonical_title: string;
+      release_year: number | null;
+      media_type: string;
+      original_language: string | null;
+      overview: string | null;
+      poster_url: string | null;
+    };
+    tmdb_source_movie_id: string;
+    provider_position: number;
+    score: number;
+    score_version: string;
+    score_components: Record<string, number | null>;
+    missing_signals: string[];
+    provenance: {
+      source: string;
+      source_movie_id: string;
+      source_url: string | null;
+    };
+    freshness: Record<string, string>;
+  }>;
+  page: {
+    page: 1;
+    requested_page_size: number;
+    returned_count: number;
+    max_page_size: 20;
+  };
+};

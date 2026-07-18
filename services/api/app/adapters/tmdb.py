@@ -2,12 +2,45 @@ import hashlib
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import json
+import socket
+import ssl
+import subprocess
 from typing import Any
+from urllib.error import HTTPError as UrlLibHTTPError
+from urllib.error import URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import httpx
 
 from app.core.config import Settings
 from app.core.normalization import normalize_title
+
+
+def summarize_tmdb_http_error(exc: httpx.HTTPError) -> tuple[str, str]:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        if status_code in {401, 403}:
+            return ("auth_failure", f"TMDB rejected credentials with HTTP {status_code}")
+        if 500 <= status_code <= 599:
+            return ("provider_http_failure", f"TMDB returned HTTP {status_code}")
+        return ("http_failure", f"TMDB returned HTTP {status_code}")
+
+    if isinstance(exc, httpx.ReadTimeout):
+        return ("timeout_failure", "TMDB request timed out")
+
+    cause = exc.__cause__
+    message = str(exc).lower()
+    if isinstance(cause, socket.gaierror) or "nodename nor servname provided" in message or "name or service not known" in message:
+        return ("dns_connectivity_failure", "DNS resolution to TMDB failed")
+    if isinstance(cause, ssl.SSLError) or "ssl" in message or "tls" in message or "eof occurred in violation of protocol" in message:
+        return ("tls_network_failure", "TLS handshake to TMDB failed")
+    if isinstance(exc, httpx.ConnectError):
+        return ("network_connect_failure", "Network connection to TMDB failed")
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return ("protocol_failure", "TMDB connection closed unexpectedly during protocol exchange")
+    return ("request_failure", exc.__class__.__name__)
 
 
 @dataclass(slots=True)
@@ -79,10 +112,109 @@ class TmdbAdapter:
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
                 last_error = exc
                 if attempt == attempts - 1:
-                    raise
+                    return self._get_json_via_curl_or_urllib(path, params=params, original_error=exc)
                 await asyncio.sleep(0.2 * (attempt + 1))
         assert last_error is not None
         raise last_error
+
+    def _get_json_via_curl_or_urllib(
+        self,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        original_error: httpx.HTTPError,
+    ) -> dict[str, Any]:
+        try:
+            return self._get_json_via_curl(path, params=params)
+        except httpx.HTTPStatusError:
+            raise
+        except httpx.HTTPError:
+            return self._get_json_via_urllib(path, params=params, original_error=original_error)
+
+    def _get_json_via_curl(
+        self,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        if params:
+            url = f"{url}?{urlencode(params)}"
+
+        headers = self._headers()
+        command = [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--output",
+            "-",
+            "--write-out",
+            "\n%{http_code}",
+            "--max-time",
+            str(int(self._settings.api_timeout_seconds)),
+            "--header",
+            f"Authorization: {headers['Authorization']}",
+            "--header",
+            f"accept: {headers['accept']}",
+            "--header",
+            f"user-agent: {headers['user-agent']}",
+            url,
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+        except FileNotFoundError as exc:
+            raise httpx.ConnectError("curl fallback unavailable", request=httpx.Request("GET", url, headers=headers, params=params)) from exc
+
+        if result.returncode != 0:
+            raise httpx.ConnectError(
+                result.stderr.strip() or "curl transport failed",
+                request=httpx.Request("GET", url, headers=headers, params=params),
+            )
+
+        body, _, status_text = result.stdout.rpartition("\n")
+        status_code = int(status_text.strip() or "0")
+        self._last_response_content = body.encode("utf-8")
+        if status_code >= 400:
+            request = httpx.Request("GET", url, headers=headers, params=params)
+            response = httpx.Response(status_code, request=request, content=self._last_response_content)
+            raise httpx.HTTPStatusError(
+                f"TMDB returned HTTP {status_code}",
+                request=request,
+                response=response,
+            )
+        return json.loads(body)
+
+    def _get_json_via_urllib(
+        self,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        original_error: httpx.HTTPError,
+    ) -> dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        if params:
+            url = f"{url}?{urlencode(params)}"
+
+        request = Request(url, headers=self._headers(), method="GET")
+        try:
+            with urlopen(request, timeout=self._settings.api_timeout_seconds) as response:
+                body = response.read()
+        except UrlLibHTTPError as exc:
+            request = httpx.Request("GET", url, headers=self._headers(), params=params)
+            response = httpx.Response(exc.code, request=request, content=exc.read())
+            raise httpx.HTTPStatusError(
+                f"TMDB returned HTTP {exc.code}",
+                request=request,
+                response=response,
+            ) from exc
+        except URLError as exc:
+            raise httpx.ConnectError(str(exc.reason), request=httpx.Request("GET", url, headers=self._headers(), params=params)) from exc
+        except ssl.SSLError as exc:
+            raise original_error from exc
+
+        self._last_response_content = body
+        return json.loads(body.decode("utf-8"))
 
     def _normalize_vote_average(self, value: Any) -> float | None:
         if isinstance(value, bool) or not isinstance(value, int | float):
@@ -136,7 +268,16 @@ class TmdbAdapter:
         params: dict[str, str] = {"page": "1"}
         if region:
             params["region"] = region
-        payload = await self._get_json(f"/movie/{source_movie_id}/recommendations", params=params)
+        try:
+            payload = await asyncio.to_thread(
+                self._get_json_via_curl,
+                f"/movie/{source_movie_id}/recommendations",
+                params=params,
+            )
+        except httpx.HTTPStatusError:
+            raise
+        except httpx.HTTPError:
+            payload = await self._get_json(f"/movie/{source_movie_id}/recommendations", params=params)
 
         fetched_at = datetime.now(UTC)
         raw_hash = hashlib.sha256(self._last_response_content).hexdigest()

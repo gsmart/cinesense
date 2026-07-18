@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+import logging
 from uuid import UUID
 
 import httpx
@@ -7,7 +8,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.adapters.tmdb import TmdbAdapter, TmdbCandidate, TmdbMovieBundle
+from app.adapters.tmdb import TmdbAdapter, TmdbCandidate, TmdbMovieBundle, summarize_tmdb_http_error
 from app.core.config import get_settings
 from app.core.freshness import FreshnessState, FreshnessWindow, evaluate_freshness
 from app.core.normalization import normalize_region, normalize_title
@@ -15,6 +16,7 @@ from app.core.scoring import compute_cine_score_v1
 from app.models.movie import ExternalId, Movie, MovieAlias, Observation
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class LookupService:
@@ -48,6 +50,7 @@ class LookupService:
         try:
             candidates = await self.tmdb.search_titles(title, year, media_type)
         except httpx.HTTPError as exc:
+            self._log_tmdb_failure("search_titles", exc, title=title, year=year, media_type=media_type)
             raise RuntimeError("TMDB request failed") from exc
         exact_candidates = self._filter_candidates(candidates, normalized_title, year)
         if len(exact_candidates) != 1:
@@ -56,6 +59,12 @@ class LookupService:
         try:
             movie = await self._upsert_tmdb_movie(exact_candidates[0], normalized_region)
         except httpx.HTTPError as exc:
+            self._log_tmdb_failure(
+                "get_movie_bundle",
+                exc,
+                source_movie_id=exact_candidates[0].source_movie_id,
+                region=normalized_region,
+            )
             raise RuntimeError("TMDB request failed") from exc
         return self._resolved_payload(movie, normalized_title, year, normalized_region, "tmdb")
 
@@ -107,6 +116,14 @@ class LookupService:
                 region=normalized_region,
             )
         except httpx.HTTPError as exc:
+            self._log_tmdb_failure(
+                "get_seed_recommendations",
+                exc,
+                seed_movie_id=seed_movie_id,
+                tmdb_source_movie_id=external.source_movie_id,
+                region=normalized_region,
+                limit=constrained_limit,
+            )
             raise RuntimeError("TMDB request failed") from exc
 
         persisted = self.persist_seed_recommendation_candidates(
@@ -229,6 +246,16 @@ class LookupService:
         if year is not None:
             stmt = stmt.where(Movie.release_year == year)
         return list(self.db.scalars(stmt).unique())
+
+    def _log_tmdb_failure(self, operation: str, exc: httpx.HTTPError, **context: object) -> None:
+        category, detail = summarize_tmdb_http_error(exc)
+        logger.warning(
+            "TMDB operation failed: operation=%s category=%s detail=%s context=%s",
+            operation,
+            category,
+            detail,
+            context,
+        )
 
     def _find_movie_by_id(self, movie_id: str) -> Movie | None:
         try:
