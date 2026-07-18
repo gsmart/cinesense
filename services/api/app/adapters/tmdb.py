@@ -18,6 +18,9 @@ class TmdbCandidate:
     release_year: int | None
     original_language: str | None
     popularity: float | None
+    vote_average: float | None = None
+    vote_count: int | None = None
+    rating_scale: str | None = None
     media_type: str = "movie"
     overview: str | None = None
     poster_path: str | None = None
@@ -81,6 +84,16 @@ class TmdbAdapter:
         assert last_error is not None
         raise last_error
 
+    def _normalize_vote_average(self, value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        return float(value)
+
+    def _normalize_vote_count(self, value: Any) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
     async def search_titles(self, query: str, year: int | None, media_type: str) -> list[TmdbCandidate]:
         if media_type != "movie":
             return []
@@ -103,6 +116,9 @@ class TmdbAdapter:
                     release_year=release_year,
                     original_language=result.get("original_language"),
                     popularity=result.get("popularity"),
+                    vote_average=self._normalize_vote_average(result.get("vote_average")),
+                    vote_count=self._normalize_vote_count(result.get("vote_count")),
+                    rating_scale="0-10" if self._normalize_vote_average(result.get("vote_average")) is not None else None,
                 )
             )
         return candidates
@@ -135,6 +151,8 @@ class TmdbAdapter:
                 continue
             release_date = result.get("release_date") or ""
             release_year = int(release_date[:4]) if len(release_date) >= 4 and release_date[:4].isdigit() else None
+            vote_average = self._normalize_vote_average(result.get("vote_average"))
+            vote_count = self._normalize_vote_count(result.get("vote_count"))
             seen_ids.add(candidate_id)
             candidates.append(
                 TmdbCandidate(
@@ -145,6 +163,9 @@ class TmdbAdapter:
                     media_type="movie",
                     original_language=result.get("original_language"),
                     popularity=result.get("popularity"),
+                    vote_average=vote_average,
+                    vote_count=vote_count,
+                    rating_scale="0-10" if vote_average is not None else None,
                     overview=result.get("overview"),
                     poster_path=result.get("poster_path"),
                     source_url=f"https://www.themoviedb.org/movie/{candidate_id}",

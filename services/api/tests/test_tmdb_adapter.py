@@ -68,6 +68,8 @@ def test_get_seed_recommendations_returns_normalized_candidates(monkeypatch):
                 "original_language": "en",
                 "release_date": "2027-12-01",
                 "popularity": 44.5,
+                "vote_average": 8.3,
+                "vote_count": 1200,
                 "overview": "x",
                 "poster_path": "/heat2.jpg",
             }
@@ -88,6 +90,9 @@ def test_get_seed_recommendations_returns_normalized_candidates(monkeypatch):
     assert candidate.media_type == "movie"
     assert candidate.original_language == "en"
     assert candidate.popularity == 44.5
+    assert candidate.vote_average == 8.3
+    assert candidate.vote_count == 1200
+    assert candidate.rating_scale == "0-10"
     assert candidate.overview == "x"
     assert candidate.poster_path == "/heat2.jpg"
     assert candidate.source_url == "https://www.themoviedb.org/movie/101"
@@ -141,6 +146,53 @@ def test_get_seed_recommendations_returns_empty_list_for_empty_results(monkeypat
     candidates = asyncio.run(adapter.get_seed_recommendations("550", 10))
 
     assert candidates == []
+
+
+def test_get_seed_recommendations_leaves_missing_rating_fields_as_none(monkeypatch):
+    reset_fake_client()
+    FakeAsyncClient.payload = {
+        "results": [
+            {
+                "id": 101,
+                "title": "Heat 2",
+                "original_language": "en",
+                "release_date": "2027-12-01",
+                "popularity": 44.5,
+            }
+        ]
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    adapter = TmdbAdapter(make_settings())
+    candidate = asyncio.run(adapter.get_seed_recommendations("550", 5))[0]
+
+    assert candidate.vote_average is None
+    assert candidate.vote_count is None
+    assert candidate.rating_scale is None
+
+
+def test_get_seed_recommendations_rejects_invalid_rating_values(monkeypatch):
+    reset_fake_client()
+    FakeAsyncClient.payload = {
+        "results": [
+            {
+                "id": 101,
+                "title": "Heat 2",
+                "original_language": "en",
+                "release_date": "2027-12-01",
+                "vote_average": "8.3",
+                "vote_count": 12.5,
+            }
+        ]
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    adapter = TmdbAdapter(make_settings())
+    candidate = asyncio.run(adapter.get_seed_recommendations("550", 5))[0]
+
+    assert candidate.vote_average is None
+    assert candidate.vote_count is None
+    assert candidate.rating_scale is None
 
 
 def test_get_seed_recommendations_propagates_safe_provider_failure(monkeypatch):
