@@ -80,6 +80,68 @@ class LookupService:
             persisted.append(self._upsert_tmdb_recommendation_candidate(candidate))
         return persisted
 
+    def rank_seed_recommendation_candidates(self, movies: list[Movie]) -> list[dict]:
+        if not movies:
+            return []
+
+        ranked: list[dict] = []
+        for position, movie in enumerate(movies[:20]):
+            external = next((item for item in movie.external_ids if item.source == "tmdb"), None)
+            if external is None:
+                continue
+
+            signal_map = {observation.signal_type: observation for observation in movie.observations if observation.source == "tmdb"}
+            audience = signal_map.get("audience_reception")
+            popularity = signal_map.get("popularity")
+            freshness_summary: dict[str, str] = {}
+            for signal_name in ("audience_reception", "popularity"):
+                observation = signal_map.get(signal_name)
+                freshness_summary[signal_name] = self._observation_state(observation).value
+            freshness_summary["critic_consensus"] = FreshnessState.MISSING.value
+
+            missing_signals = ["critic_consensus"]
+            if audience is None:
+                missing_signals.append("audience_reception")
+            if popularity is None:
+                missing_signals.append("popularity")
+
+            score = compute_cine_score_v1(
+                normalized_query="",
+                canonical_title=movie.normalized_title,
+                release_year=movie.release_year,
+                requested_year=None,
+                vote_average=float(audience.numeric_value) if audience and audience.numeric_value is not None else None,
+                vote_count=audience.evidence_count if audience else None,
+                popularity=float(popularity.numeric_value) if popularity and popularity.numeric_value is not None else None,
+                missing_signals=missing_signals,
+                seed_relevance=(20 - position) / 20.0,
+            )
+            ranked.append(
+                {
+                    "movie": {
+                        "movie_id": str(movie.id),
+                        "canonical_title": movie.canonical_title,
+                        "release_year": movie.release_year,
+                        "media_type": movie.media_type,
+                    },
+                    "tmdb_source_movie_id": external.source_movie_id,
+                    "provider_position": position,
+                    "score": score["total"],
+                    "score_version": score["version"],
+                    "score_components": score["components"],
+                    "missing_signals": score["missing_signals"],
+                    "provenance": {
+                        "source": external.source,
+                        "source_movie_id": external.source_movie_id,
+                        "source_url": external.source_url,
+                    },
+                    "freshness": freshness_summary,
+                }
+            )
+
+        ranked.sort(key=lambda item: (-item["score"], item["provider_position"], item["tmdb_source_movie_id"]))
+        return ranked
+
     def _find_local_matches(self, normalized_title: str, year: int | None, media_type: str) -> list[Movie]:
         stmt: Select[tuple[Movie]] = (
             select(Movie)
@@ -108,6 +170,13 @@ class LookupService:
             if observation.signal_type == signal_type:
                 return observation
         return None
+
+    def _observation_state(self, observation: Observation | None) -> FreshnessState:
+        if observation is None:
+            return FreshnessState.MISSING
+        return evaluate_freshness(
+            FreshnessWindow(observation.fresh_until, observation.stale_until, observation.fetch_status)
+        )
 
     def _filter_candidates(
         self, candidates: list[TmdbCandidate], normalized_title: str, year: int | None

@@ -16,10 +16,14 @@ def compute_cine_score_v1(
     vote_count: int | None,
     popularity: float | None,
     missing_signals: list[str],
+    seed_relevance: float | None = None,
 ) -> dict[str, Any]:
-    title_match = 1.0 if normalized_query == canonical_title else 0.85
-    year_bonus = 1.0 if requested_year and requested_year == release_year else 0.8
-    query_match = round(30.0 * title_match * year_bonus, 2)
+    if seed_relevance is not None:
+        query_match = round(30.0 * clamp(seed_relevance), 2)
+    else:
+        title_match = 1.0 if normalized_query == canonical_title else 0.85
+        year_bonus = 1.0 if requested_year and requested_year == release_year else 0.8
+        query_match = round(30.0 * title_match * year_bonus, 2)
 
     audience_reception = None
     if vote_average is not None:
@@ -59,4 +63,3 @@ def compute_cine_score_v1(
         },
         "missing_signals": missing_signals,
     }
-
