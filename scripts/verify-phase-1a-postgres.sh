@@ -45,8 +45,9 @@ set +e
 test_output="$(
   docker compose run --rm -T \
     -e CINESENSE_TEST_DATABASE_URL="$TEST_DSN" \
+    -v "$ROOT_DIR/services/api:/app/services/api" \
     api \
-    python -m pytest "$TEST_PATH" -v 2>&1
+    sh -lc "cd /app/services/api && python -m pytest -c /dev/null -o 'markers=integration: tests that require the Docker-backed PostgreSQL environment' -m integration $TEST_PATH -v" 2>&1
 )"
 test_status=$?
 set -e
@@ -61,7 +62,7 @@ if grep -Eq '(^|[[:space:]])SKIPPED([[:space:]]|$)' <<<"$test_output"; then
   fail "postgres verification test was skipped"
 fi
 
-if ! grep -Eq '(^|[[:space:]])1 passed([[:space:]]|$)' <<<"$test_output"; then
+if ! grep -Eq '(^|[[:space:]])1 passed([[:space:],]|$)' <<<"$test_output"; then
   fail "postgres verification test did not report a passing result"
 fi
 

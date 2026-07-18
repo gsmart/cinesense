@@ -15,6 +15,9 @@ from app.models.movie import ExternalId, Movie, Observation
 from app.services import LookupService
 
 
+pytestmark = pytest.mark.integration
+
+
 TEST_DATABASE_URL = os.environ.get(
     "CINESENSE_TEST_DATABASE_URL",
     "postgresql+psycopg://cinesense:cinesense@localhost:5432/postgres",
