@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+node_modules
+apps/web/.next
+services/api/.pytest_cache
+services/api/__pycache__
+**/__pycache__
+**/.DS_Store
+coverage
+dist
+build
+

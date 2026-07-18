@@ -1,0 +1,13 @@
+{
+  "name": "cinesense",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "start:phase-1a": "./scripts/start-phase-1a.sh",
+    "dev:web": "npm --workspace @cinesense/web run dev",
+    "build:web": "npm --workspace @cinesense/web run build",
+    "lint:web": "npm --workspace @cinesense/web run lint"
+  }
+}
