@@ -19,4 +19,3 @@ app.include_router(lookup_router, prefix="/api/v1")
 @app.get("/health")
 def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
-

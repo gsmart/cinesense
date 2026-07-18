@@ -120,6 +120,12 @@ class LookupService:
             "region": normalized_region,
             "limit": constrained_limit,
             "results": ranked,
+            "page": {
+                "page": 1,
+                "requested_page_size": constrained_limit,
+                "returned_count": len(ranked),
+                "max_page_size": 20,
+            },
         }
 
     def persist_seed_recommendation_candidates(
@@ -187,6 +193,9 @@ class LookupService:
                         "canonical_title": movie.canonical_title,
                         "release_year": movie.release_year,
                         "media_type": movie.media_type,
+                        "original_language": movie.original_language,
+                        "overview": movie.overview,
+                        "poster_url": movie.poster_url,
                     },
                     "tmdb_source_movie_id": external.source_movie_id,
                     "provider_position": position,
