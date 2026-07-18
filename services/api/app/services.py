@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import httpx
@@ -186,6 +186,7 @@ class LookupService:
         existing.poster_url = self._candidate_poster_url(candidate)
         self._merge_aliases(existing, [candidate.title])
         self._merge_candidate_external_id(existing, candidate)
+        self._merge_candidate_observations(existing, candidate)
 
         try:
             self.db.commit()
@@ -255,6 +256,99 @@ class LookupService:
                 last_seen_at=now,
             )
         )
+
+    def _merge_candidate_observations(self, movie: Movie, candidate: TmdbCandidate) -> None:
+        observation_items = self._candidate_observation_items(candidate)
+        if not observation_items:
+            return
+        bundle = TmdbMovieBundle(
+            source_movie_id=candidate.source_movie_id,
+            source_url=candidate.source_url or f"https://www.themoviedb.org/movie/{candidate.source_movie_id}",
+            canonical_title=candidate.title,
+            normalized_title=candidate.normalized_title,
+            release_year=candidate.release_year,
+            original_language=candidate.original_language,
+            overview=candidate.overview,
+            runtime_minutes=None,
+            poster_url=self._candidate_poster_url(candidate),
+            aliases=[candidate.title],
+            observations=observation_items,
+        )
+        self._merge_observations(movie, bundle)
+
+    def _candidate_observation_items(self, candidate: TmdbCandidate) -> list[dict]:
+        if candidate.fetched_at is None or candidate.raw_response_hash is None:
+            return []
+
+        source_url = candidate.source_url or f"https://www.themoviedb.org/movie/{candidate.source_movie_id}"
+        items: list[dict] = []
+        if isinstance(candidate.popularity, int | float):
+            items.append(
+                self._observation_item(
+                    signal_type="popularity",
+                    value={"popularity": candidate.popularity},
+                    fetched_at=candidate.fetched_at,
+                    raw_hash=candidate.raw_response_hash,
+                    source_movie_id=candidate.source_movie_id,
+                    source_url=source_url,
+                    fresh_delta=timedelta(hours=settings.popularity_fresh_hours),
+                    stale_delta=timedelta(days=settings.popularity_stale_days),
+                    numeric_value=float(candidate.popularity),
+                    scale=None,
+                )
+            )
+        if isinstance(candidate.vote_average, int | float):
+            items.append(
+                self._observation_item(
+                    signal_type="audience_reception",
+                    value={"vote_average": candidate.vote_average, "vote_count": candidate.vote_count},
+                    fetched_at=candidate.fetched_at,
+                    raw_hash=candidate.raw_response_hash,
+                    source_movie_id=candidate.source_movie_id,
+                    source_url=source_url,
+                    fresh_delta=timedelta(days=settings.rating_fresh_days),
+                    stale_delta=timedelta(days=settings.rating_stale_days),
+                    numeric_value=float(candidate.vote_average),
+                    evidence_count=candidate.vote_count if isinstance(candidate.vote_count, int) else None,
+                    scale=candidate.rating_scale,
+                )
+            )
+        for item in items:
+            item["fetch_status"] = candidate.fetch_status
+            item["parser_version"] = candidate.parser_version
+        return items
+
+    def _observation_item(
+        self,
+        *,
+        signal_type: str,
+        value: dict,
+        fetched_at: datetime,
+        raw_hash: str,
+        source_movie_id: str,
+        source_url: str,
+        fresh_delta: timedelta,
+        stale_delta: timedelta,
+        numeric_value: float | None = None,
+        evidence_count: int | None = None,
+        scale: str | None = None,
+    ) -> dict:
+        return {
+            "signal_type": signal_type,
+            "value": value,
+            "numeric_value": numeric_value,
+            "evidence_count": evidence_count,
+            "scale": scale,
+            "fetched_at": fetched_at,
+            "fresh_until": fetched_at + fresh_delta,
+            "stale_until": fetched_at + stale_delta,
+            "last_success_at": fetched_at,
+            "source_url": source_url,
+            "fetch_status": "SUCCESS",
+            "parser_version": "tmdb-v1",
+            "raw_response_hash": raw_hash,
+            "source_movie_id": source_movie_id,
+        }
 
     def _merge_observations(self, movie: Movie, bundle: TmdbMovieBundle) -> None:
         by_signal = {observation.signal_type: observation for observation in movie.observations if observation.source == "tmdb"}
