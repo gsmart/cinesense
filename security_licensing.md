@@ -38,6 +38,8 @@ These artifacts should be treated as internal engineering data. They are not pro
 - review CSVs must stay free of secrets
 - reviewer notes are human-authored local inputs and should be handled as internal files
 - validation should remain deterministic even when review input is absent or incomplete
+- reviewer-facing CSV exports must avoid spreadsheet-formula injection in editable cells
+- reviewed imports must reject immutable-column tampering and formula-like reviewer input
 
 ## Commercial Launch Gates
 

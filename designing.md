@@ -90,6 +90,10 @@ The committed offline pipeline is artifact-based:
    - computes offline `cine-score-v2-shadow-1`
    - compares shadow ordering against a `cine-score-v1` proxy
    - emits ranking, comparison, summary, and manifest outputs
+5. human-judgment workflow
+   - `build_regional_judgment_cases.py` reads evaluated shadow artifacts and generates blinded multilingual pairwise review cases plus a machine-only mapping
+   - `import_regional_judgments.py` validates a completed review CSV against immutable generated metadata and writes an immutable reviewed snapshot
+   - `evaluate_regional_weight_configs.py` reuses the shadow scorer against a bounded weight grid and compares each configuration to reviewed judgments
 
 These flows are deterministic and file-backed, not service-backed.
 
@@ -110,3 +114,11 @@ The frontend currently exposes:
 - shared movie cards, provenance, freshness, missing-signal, and score-breakdown rendering
 
 The UI preserves backend result order and does not calculate its own ranking.
+
+## Human Judgment Boundaries
+
+- reviewer-facing CSVs intentionally exclude v1/v2 ranks, scores, rank deltas, and weight configuration identifiers
+- pairwise comparison is the primary review unit even when cases are sampled from top-k, disagreement, fallback, or confidence diagnostics
+- reviewer-editable cells are limited to preference, confidence, reason code, and notes
+- reviewed imports fail on immutable-column tampering, missing or duplicate case IDs, invalid reviewer values, and formula-like spreadsheet content
+- reviewed snapshots and candidate-weight evaluation remain file-backed and `activation_eligible=false`

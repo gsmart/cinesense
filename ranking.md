@@ -68,6 +68,22 @@ Current status:
 - gated by evidence coverage and manual review outcomes
 - not eligible for production activation
 
+## Human Judgment And Weight Evaluation
+
+The current workspace also adds an offline-only judgment workflow around the shadow scorer:
+
+- blinded multilingual pairwise review case generation from evaluated shadow artifacts
+- strict reviewed-CSV import with immutable-column validation
+- immutable reviewed judgment snapshots marked `HUMAN_EVALUATION_ONLY`
+- bounded, explicit `cine-score-v2` candidate weight grid evaluation against reviewed pairwise judgments
+
+This workflow does not:
+
+- change the active production scorer
+- mutate `cine-score-v1`
+- auto-activate any candidate configuration
+- treat synthetic or incomplete review coverage as product approval
+
 ## Missing-Data And Fallback Rules
 
 - production requests continue to tolerate partial data under `cine-score-v1`

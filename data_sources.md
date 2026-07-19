@@ -103,6 +103,7 @@ Used now for:
 - deterministic tests
 - synthetic ranking audits
 - optional offline review inputs
+- blinded human ranking judgment CSVs and reviewed snapshots
 
 ## Storage And Attribution Rules
 
@@ -111,6 +112,7 @@ Used now for:
 - source identity and fetch timing are preserved for auditability
 - offline artifact runs store input/output hashes and source metadata in manifests
 - regional evidence review files must be treated as local artifacts, not published user-facing data
+- human ranking judgment files are local reviewer artifacts and must not be treated as provider truth or product-facing metadata
 
 ## Current Constraints
 

@@ -20,6 +20,9 @@ Offline workflow entry points:
 - `validate_regional_evidence_sample.py`
 - `build_regional_cohort_baselines.py`
 - `run_regional_shadow_scoring.py`
+- `build_regional_judgment_cases.py`
+- `import_regional_judgments.py`
+- `evaluate_regional_weight_configs.py`
 
 ## Implemented Verification Areas
 
@@ -100,6 +103,12 @@ Cohort baselines:
 
 Shadow scoring:
 - confirm `shadow_scores.jsonl`, `shadow_ranking.json`, `v1_v2_comparison.json`, `shadow_summary.json`, and `shadow_manifest.json`
+
+Human judgment workflow:
+- confirm `judgment_cases.csv` excludes v1/v2 ranks, scores, and rank deltas
+- confirm `judgment_case_mapping.jsonl` keeps the hidden scorer fields needed for offline evaluation
+- confirm `reviewed_judgments.jsonl` and `reviewed_judgment_summary.json` are written only after immutable-column validation passes
+- confirm `weight_evaluation_summary.json`, `weight_evaluation_cases.jsonl`, `language_weight_comparison.json`, `evaluation_recommendation.json`, and `evaluation_manifest.json` are deterministic for identical inputs
 
 ## Determinism And Negative Checks
 

@@ -2,19 +2,19 @@
 
 Current date: July 19, 2026
 Inspected branch: `main`
-Inspected HEAD: `5f6b8e00e0810bcf05f4cb7f8f46a2fbf20a8f4b`
-Worktree note: uncommitted files exist for regional shadow evaluation and are not treated as completed repository milestones
+Inspected HEAD: `7ccb601dd0a738ca10b9bddeae47f3cb1ae520f9`
+Worktree note: uncommitted files exist for regional human-judgment and bounded weight-evaluation workflow work and are not treated as completed repository milestones
 
 ## Current Phase
 
 Current phase:
-- Phase 2R shadow-scoring prototype work is implemented provisionally
+- Phase 2R shadow-scoring and offline evaluation work is implemented provisionally
 
 Last completed phase:
-- Phase 2R ranking foundation and offline `cine-score-v2` shadow scoring prototype at commit `5f6b8e0`
+- Phase 2R.3A multilingual shadow evaluation at commit `1e30565`
 
 Immediate next phase:
-- evaluate the shadow pipeline, decide whether the regional evidence and cohort baseline gates justify deeper `cine-score-v2` work, and keep production on `cine-score-v1` until that evidence exists
+- collect blinded multilingual human judgments, validate reviewed snapshots, and compare bounded `cine-score-v2` weight candidates without changing production ranking
 
 Current blockers:
 - no approved path to activate `cine-score-v2` in production
@@ -40,7 +40,8 @@ Current blockers:
 | Expanded regional evidence review gate | IMPLEMENTED_PROVISIONALLY | Commit `7a1b61e`; validation and review sample output exist, approval remains manual |
 | Regional cohort baseline builder | IMPLEMENTED_PROVISIONALLY | Commit `958b7ce`; offline baseline artifacts and gate status exist |
 | `cine-score-v2` shadow scoring prototype | IMPLEMENTED_PROVISIONALLY | Commit `5f6b8e0`; offline comparison only, production unaffected |
-| Multilingual shadow evaluation | IN_PROGRESS | Uncommitted worktree files exist, not part of `HEAD` |
+| Multilingual shadow evaluation | COMPLETED | Commit `1e30565`; offline evaluation artifacts and deterministic diagnostics |
+| Multilingual human judgment workflow and bounded weight evaluation | IN_PROGRESS | Current worktree adds offline-only case generation, reviewed snapshot import, and candidate-weight comparison |
 
 ## Completed Milestones
 

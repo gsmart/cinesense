@@ -85,6 +85,35 @@ Outputs:
 - `cine-score-v1` comparison rows
 - cohort fallback diagnostics
 
+### `build_regional_judgment_cases.py`
+
+Side effects:
+- local artifact reads only
+- writes blinded reviewer CSV, machine-only mapping, and manifest outputs
+
+Boundary:
+- reviewer-facing CSV excludes scorer ranks and scores
+
+### `import_regional_judgments.py`
+
+Side effects:
+- local artifact reads only
+- writes immutable reviewed-judgment JSONL, summary, and manifest outputs
+
+Checks:
+- immutable-column protection
+- allowed reviewer vocabulary
+- formula-like spreadsheet content rejection
+
+### `evaluate_regional_weight_configs.py`
+
+Side effects:
+- local artifact reads only
+- writes bounded candidate-weight evaluation outputs under an explicit output directory
+
+Boundary:
+- no optimizer, no production activation, no DB writes
+
 ### `audit_regional_ranking.py`
 
 Purpose:
