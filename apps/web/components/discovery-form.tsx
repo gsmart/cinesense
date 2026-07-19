@@ -3,10 +3,21 @@
 import type { CSSProperties, FormEvent } from "react";
 import { useState } from "react";
 
-import type { DiscoveryRequestPayload, DiscoveryResponse } from "@/lib/types";
+import type {
+  ControlledErrorResponse,
+  DiscoveryNormalizedRequest,
+  DiscoveryRequestPayload,
+  DiscoveryResponse,
+  NaturalLanguageDiscoveryRequestPayload,
+  NaturalLanguageDiscoveryResponse,
+} from "@/lib/types";
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
+const examplePrompts = [
+  "Marathi thrillers released between 2016 and 2018",
+  "English science-fiction movies after 2015 under 130 minutes",
+  "Hindi comedy movies from the 2000s",
+] as const;
 const genreOptions = [
   ["action", "Action"],
   ["adventure", "Adventure"],
@@ -29,8 +40,8 @@ const genreOptions = [
   ["western", "Western"],
 ] as const;
 
-type DiscoveryStatus = "idle" | "loading" | "error" | "success";
-
+type DiscoveryMode = "natural-language" | "manual";
+type DiscoveryStatus = "idle" | "loading" | "paging" | "error" | "success";
 type DiscoveryFilters = {
   genres: string[];
   originalLanguage: string;
@@ -72,121 +83,137 @@ function hasMeaningfulNarrowing(filters: DiscoveryFilters): boolean {
       filters.releaseYearMax.trim() ||
       filters.runtimeMinutesMin.trim() ||
       filters.runtimeMinutesMax.trim() ||
-      parseInteger(filters.minimumEvidenceCount) !== null && parseInteger(filters.minimumEvidenceCount)! > 0
+      (parseInteger(filters.minimumEvidenceCount) ?? 0) > 0,
   );
 }
 
-function buildRequest(filters: DiscoveryFilters, page: number): DiscoveryRequestPayload {
+function buildManualRequest(filters: DiscoveryFilters, page: number): DiscoveryRequestPayload {
   const request: DiscoveryRequestPayload = {
     media_type: "movie",
     page,
     page_size: parseInteger(filters.pageSize) ?? 20,
   };
 
-  if (filters.genres.length) {
-    request.genres = filters.genres;
-  }
-  if (filters.originalLanguage.trim()) {
-    request.original_language = filters.originalLanguage.trim();
-  }
-  if (filters.region.trim()) {
-    request.region = filters.region.trim();
-  }
+  if (filters.genres.length) request.genres = filters.genres;
+  if (filters.originalLanguage.trim()) request.original_language = filters.originalLanguage.trim();
+  if (filters.region.trim()) request.region = filters.region.trim();
+
   const releaseYearMin = parseInteger(filters.releaseYearMin);
-  if (releaseYearMin !== null) {
-    request.release_year_min = releaseYearMin;
-  }
+  if (releaseYearMin !== null) request.release_year_min = releaseYearMin;
   const releaseYearMax = parseInteger(filters.releaseYearMax);
-  if (releaseYearMax !== null) {
-    request.release_year_max = releaseYearMax;
-  }
+  if (releaseYearMax !== null) request.release_year_max = releaseYearMax;
   const runtimeMinutesMin = parseInteger(filters.runtimeMinutesMin);
-  if (runtimeMinutesMin !== null) {
-    request.runtime_minutes_min = runtimeMinutesMin;
-  }
+  if (runtimeMinutesMin !== null) request.runtime_minutes_min = runtimeMinutesMin;
   const runtimeMinutesMax = parseInteger(filters.runtimeMinutesMax);
-  if (runtimeMinutesMax !== null) {
-    request.runtime_minutes_max = runtimeMinutesMax;
-  }
+  if (runtimeMinutesMax !== null) request.runtime_minutes_max = runtimeMinutesMax;
   const minimumEvidenceCount = parseInteger(filters.minimumEvidenceCount);
-  if (minimumEvidenceCount !== null) {
-    request.minimum_evidence_count = minimumEvidenceCount;
-  }
+  if (minimumEvidenceCount !== null) request.minimum_evidence_count = minimumEvidenceCount;
 
   return request;
 }
 
-function buildRequestFromNormalized(normalized: DiscoveryResponse["request"], page: number): DiscoveryRequestPayload {
+function buildStructuredRequestFromNormalized(
+  normalized: DiscoveryNormalizedRequest,
+  page: number,
+): DiscoveryRequestPayload {
   const request: DiscoveryRequestPayload = {
     media_type: "movie",
     page,
     page_size: normalized.page_size,
   };
 
-  if (normalized.genres.length) {
-    request.genres = normalized.genres;
-  }
-  if (normalized.original_language) {
-    request.original_language = normalized.original_language;
-  }
-  if (normalized.region) {
-    request.region = normalized.region;
-  }
-  if (normalized.release_year_min !== null) {
-    request.release_year_min = normalized.release_year_min;
-  }
-  if (normalized.release_year_max !== null) {
-    request.release_year_max = normalized.release_year_max;
-  }
-  if (normalized.runtime_minutes_min !== null) {
-    request.runtime_minutes_min = normalized.runtime_minutes_min;
-  }
-  if (normalized.runtime_minutes_max !== null) {
-    request.runtime_minutes_max = normalized.runtime_minutes_max;
-  }
-  if (normalized.minimum_evidence_count !== 0) {
-    request.minimum_evidence_count = normalized.minimum_evidence_count;
-  }
+  if (normalized.genres.length) request.genres = normalized.genres;
+  if (normalized.original_language) request.original_language = normalized.original_language;
+  if (normalized.region) request.region = normalized.region;
+  if (normalized.release_year_min !== null) request.release_year_min = normalized.release_year_min;
+  if (normalized.release_year_max !== null) request.release_year_max = normalized.release_year_max;
+  if (normalized.runtime_minutes_min !== null) request.runtime_minutes_min = normalized.runtime_minutes_min;
+  if (normalized.runtime_minutes_max !== null) request.runtime_minutes_max = normalized.runtime_minutes_max;
+  if (normalized.minimum_evidence_count !== 0) request.minimum_evidence_count = normalized.minimum_evidence_count;
+  if (normalized.availability_required) request.availability_required = true;
 
   return request;
 }
 
-function getErrorMessage(statusCode: number, payload: unknown): string {
-  if (statusCode === 422) {
-    if (
-      typeof payload === "object" &&
-      payload !== null &&
-      "detail" in payload &&
-      typeof (payload as { detail?: unknown }).detail === "object" &&
-      (payload as { detail?: { error?: string } }).detail?.error === "unsupported_filter"
-    ) {
-      return "Availability filtering is planned for Phase 2G and is not enabled yet.";
-    }
+function activeFilterLabels(request: DiscoveryNormalizedRequest): string[] {
+  const labels: string[] = [];
 
-    const detail = typeof payload === "object" && payload !== null ? (payload as { detail?: unknown }).detail : null;
-    if (Array.isArray(detail)) {
-      return "Please correct the discovery filters and try again.";
+  if (request.genres.length) labels.push(`Genres: ${request.genres.join(", ")}`);
+  if (request.original_language) labels.push(`Original language: ${request.original_language}`);
+  if (request.region) labels.push(`Region: ${request.region}`);
+  if (request.release_year_min !== null || request.release_year_max !== null) {
+    labels.push(`Release years: ${request.release_year_min ?? "?"} to ${request.release_year_max ?? "?"}`);
+  }
+  if (request.runtime_minutes_min !== null || request.runtime_minutes_max !== null) {
+    labels.push(`Runtime: ${request.runtime_minutes_min ?? "?"} to ${request.runtime_minutes_max ?? "?"} minutes`);
+  }
+  if (request.minimum_evidence_count > 0) labels.push(`Minimum evidence count: ${request.minimum_evidence_count}`);
+  if (request.availability_required) labels.push("Availability required");
+  labels.push(`Page size: ${request.page_size}`);
+
+  return labels;
+}
+
+function getManualErrorMessage(statusCode: number, payload: ControlledErrorResponse): string {
+  if (statusCode === 422) {
+    if (typeof payload.detail === "object" && payload.detail && "error" in payload.detail && payload.detail.error === "unsupported_filter") {
+      return "That filter is not available yet. Regional streaming availability is planned for a later phase.";
     }
-    if (typeof detail === "string" && detail.includes("unrestricted discovery requests")) {
+    if (Array.isArray(payload.detail)) return "Please correct the discovery filters and try again.";
+    if (typeof payload.detail === "string" && payload.detail.includes("unrestricted discovery requests")) {
       return "Add at least one narrowing filter before searching.";
     }
     return "Please correct the discovery filters and try again.";
   }
-
-  if (statusCode >= 500) {
-    return "The discovery service is temporarily unavailable. Please try again.";
-  }
-
+  if (statusCode >= 500) return "The discovery service is temporarily unavailable. Please try again.";
   return "Discovery request failed.";
 }
 
+function getDetailErrorCode(payload: ControlledErrorResponse): string | null {
+  if (!payload.detail || Array.isArray(payload.detail) || typeof payload.detail !== "object") {
+    return null;
+  }
+  return typeof payload.detail.error === "string" ? payload.detail.error : null;
+}
+
+function getNaturalLanguageErrorMessage(statusCode: number, payload: ControlledErrorResponse): string {
+  const errorCode = getDetailErrorCode(payload);
+  if (statusCode === 422 && errorCode) {
+    switch (errorCode) {
+      case "unrestricted_interpretation":
+        return "Please add at least one specific preference, such as genre, language, year, or runtime.";
+      case "invalid_interpretation":
+        return "We could not convert that request into valid movie filters. Please try being more specific.";
+      case "unsupported_filter":
+        return "That filter is not available yet. Regional streaming availability is planned for a later phase.";
+    }
+  }
+  if (statusCode === 503 && errorCode === "interpreter_unavailable") {
+    return "Natural-language discovery is temporarily unavailable. You can still use manual filters.";
+  }
+  if (statusCode === 502 && errorCode === "interpreter_failure") {
+    return "We could not interpret that request right now. Please try again or use manual filters.";
+  }
+  if (statusCode >= 500) {
+    return "We could not interpret that request right now. Please try again or use manual filters.";
+  }
+  return "We could not convert that request into valid movie filters. Please try being more specific.";
+}
+
 export function DiscoveryForm() {
+  const [mode, setMode] = useState<DiscoveryMode>("natural-language");
   const [filters, setFilters] = useState<DiscoveryFilters>(defaultFilters);
+  const [naturalLanguageQuery, setNaturalLanguageQuery] = useState("");
   const [status, setStatus] = useState<DiscoveryStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<DiscoveryResponse | null>(null);
+  const [interpretedRequest, setInterpretedRequest] = useState<DiscoveryNormalizedRequest | null>(null);
+  const [lastNaturalLanguageQuery, setLastNaturalLanguageQuery] = useState<string | null>(null);
 
-  const canSubmit = hasMeaningfulNarrowing(filters) && status !== "loading";
+  const manualCanSubmit = hasMeaningfulNarrowing(filters) && status !== "loading" && status !== "paging";
+  const trimmedQuery = naturalLanguageQuery.trim();
+  const naturalLanguageCanSubmit =
+    trimmedQuery.length > 0 && trimmedQuery.length <= 500 && status !== "loading" && status !== "paging";
 
   function updateFilter<K extends keyof DiscoveryFilters>(key: K, value: DiscoveryFilters[K]) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -201,89 +228,152 @@ export function DiscoveryForm() {
     }));
   }
 
-  async function runDiscovery(request: DiscoveryRequestPayload) {
-    setStatus("loading");
+  function resetResults() {
+    setStatus("idle");
+    setError(null);
+    setResponse(null);
+    setInterpretedRequest(null);
+    setLastNaturalLanguageQuery(null);
+  }
+
+  async function runStructuredDiscovery(request: DiscoveryRequestPayload, nextStatus: "loading" | "paging") {
+    setStatus(nextStatus);
     setError(null);
 
-    const requestResult = await fetch(`${apiBase}/api/v1/discover`, {
+    const result = await fetch(`${apiBase}/api/v1/discover`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
     });
 
-    const data = await requestResult.json().catch(() => ({}));
-    if (!requestResult.ok) {
+    const data = (await result.json().catch(() => ({}))) as ControlledErrorResponse | DiscoveryResponse;
+    if (!result.ok) {
       setStatus("error");
-      setError(getErrorMessage(requestResult.status, data));
+      setError(getManualErrorMessage(result.status, data as ControlledErrorResponse));
       return;
     }
 
-    setResponse(data as DiscoveryResponse);
+    const typed = data as DiscoveryResponse;
+    setResponse(typed);
+    setInterpretedRequest(null);
     setStatus("success");
   }
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+  async function runNaturalLanguageDiscovery(request: NaturalLanguageDiscoveryRequestPayload) {
+    setStatus("loading");
+    setError(null);
+
+    const result = await fetch(`${apiBase}/api/v1/discover/natural-language`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+
+    const data = (await result.json().catch(() => ({}))) as ControlledErrorResponse | NaturalLanguageDiscoveryResponse;
+    if (!result.ok) {
+      setStatus("error");
+      setError(getNaturalLanguageErrorMessage(result.status, data as ControlledErrorResponse));
+      return;
+    }
+
+    const typed = data as NaturalLanguageDiscoveryResponse;
+    setResponse({
+      status: "ok",
+      request: typed.interpreted_request,
+      results: typed.results,
+      page: typed.page,
+    });
+    setInterpretedRequest(typed.interpreted_request);
+    setLastNaturalLanguageQuery(typed.query);
+    setStatus("success");
+  }
+
+  async function onManualSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!hasMeaningfulNarrowing(filters)) {
       setStatus("error");
       setError("Add at least one narrowing filter before searching.");
       return;
     }
-    await runDiscovery(buildRequest(filters, 1));
+    await runStructuredDiscovery(buildManualRequest(filters, 1), "loading");
+  }
+
+  async function onNaturalLanguageSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = naturalLanguageQuery.trim();
+    if (!query) {
+      setStatus("error");
+      setError("Please enter a movie request.");
+      return;
+    }
+    await runNaturalLanguageDiscovery({
+      query,
+      page: 1,
+      page_size: parseInteger(filters.pageSize) ?? 20,
+    });
   }
 
   async function onPreviousPage() {
-    if (!response || response.page.page <= 1 || status === "loading") {
+    if (!response || response.page.page <= 1 || status === "loading" || status === "paging") return;
+    setError(null);
+    if (interpretedRequest) {
+      await runStructuredDiscovery(buildStructuredRequestFromNormalized(interpretedRequest, response.page.page - 1), "paging");
       return;
     }
-    await runDiscovery(buildRequestFromNormalized(response.request, response.page.page - 1));
+    await runStructuredDiscovery(buildStructuredRequestFromNormalized(response.request, response.page.page - 1), "paging");
   }
 
   async function onNextPage() {
-    if (!response || status === "loading") {
+    if (!response || status === "loading" || status === "paging") return;
+    if (response.page.returned_count < response.page.requested_page_size) return;
+    setError(null);
+    if (interpretedRequest) {
+      await runStructuredDiscovery(buildStructuredRequestFromNormalized(interpretedRequest, response.page.page + 1), "paging");
       return;
     }
-    if (response.page.returned_count < response.page.requested_page_size) {
-      return;
-    }
-    await runDiscovery(buildRequestFromNormalized(response.request, response.page.page + 1));
+    await runStructuredDiscovery(buildStructuredRequestFromNormalized(response.request, response.page.page + 1), "paging");
   }
 
-  function onReset() {
+  function onManualReset() {
     setFilters(defaultFilters);
-    setStatus("idle");
-    setError(null);
-    setResponse(null);
+    resetResults();
   }
+
+  function onNaturalLanguageClear() {
+    setNaturalLanguageQuery("");
+    resetResults();
+  }
+
+  const summaryRequest = interpretedRequest ?? response?.request ?? null;
 
   return (
     <section style={styles.shell}>
       <div style={styles.hero}>
-        <p style={styles.kicker}>Phase 2D.2</p>
-        <h1 style={styles.title}>Structured movie discovery, manual filters only.</h1>
+        <p style={styles.kicker}>Phase 2E.3</p>
+        <h1 style={styles.title}>Discover movies with plain language or manual filters.</h1>
         <p style={styles.copy}>
-          Build a provider-neutral request from explicit filters, keep backend ranking authoritative,
-          and inspect score breakdown, provenance, freshness, and missing signals without free-text shortcuts.
+          Natural-language discovery interprets filters once, then reuses the same structured request for pagination.
+          Manual filters still work unchanged and backend ranking stays authoritative.
         </p>
       </div>
 
       <section style={styles.achievementPanel}>
         <div style={styles.achievementHeader}>
           <p style={styles.kicker}>Discovery Rules</p>
-          <p style={styles.achievementCopy}>Region alone does not count as narrowing, and availability stays off until Phase 2G.</p>
+          <p style={styles.achievementCopy}>The LLM only interprets filters. Ranking and validation stay in the backend.</p>
         </div>
         <div style={styles.achievementGrid}>
           <article style={styles.achievementCard}>
-            <p style={styles.achievementLabel}>Contract</p>
-            <strong style={styles.achievementValue}>Phase 2A structured request only</strong>
+            <p style={styles.achievementLabel}>Mode</p>
+            <strong style={styles.achievementValue}>Describe or filter manually</strong>
           </article>
           <article style={styles.achievementCard}>
-            <p style={styles.achievementLabel}>Ranking</p>
-            <strong style={styles.achievementValue}>Backend order preserved</strong>
+            <p style={styles.achievementLabel}>Pagination</p>
+            <strong style={styles.achievementValue}>No repeat LLM call after page 1</strong>
           </article>
           <article style={styles.achievementCard}>
             <p style={styles.achievementLabel}>Availability</p>
-            <strong style={styles.achievementValue}>Coming in Phase 2G</strong>
+            <strong style={styles.achievementValue}>Still planned for Phase 2G</strong>
           </article>
           <article style={styles.achievementCard}>
             <p style={styles.achievementLabel}>Page Size</p>
@@ -292,134 +382,162 @@ export function DiscoveryForm() {
         </div>
       </section>
 
-      <form onSubmit={onSubmit} style={styles.form}>
-        <section style={styles.section}>
-          <h2 style={styles.subheading}>Genres</h2>
-          <div style={styles.genreGrid}>
-            {genreOptions.map(([slug, label]) => (
-              <label key={slug} style={styles.genreChip}>
+      <section style={styles.modeToggle}>
+        <button
+          type="button"
+          style={mode === "natural-language" ? styles.activeModeButton : styles.modeButton}
+          onClick={() => setMode("natural-language")}
+        >
+          Describe what you want
+        </button>
+        <button
+          type="button"
+          style={mode === "manual" ? styles.activeModeButton : styles.modeButton}
+          onClick={() => setMode("manual")}
+        >
+          Manual filters
+        </button>
+      </section>
+
+      {mode === "natural-language" ? (
+        <form onSubmit={onNaturalLanguageSubmit} style={styles.form}>
+          <section style={styles.section}>
+            <h2 style={styles.subheading}>Describe what you want</h2>
+            <label style={styles.field}>
+              <span>Movie request</span>
+              <textarea
+                maxLength={500}
+                value={naturalLanguageQuery}
+                onChange={(event) => setNaturalLanguageQuery(event.target.value)}
+                placeholder="Marathi thrillers released between 2016 and 2018"
+                style={styles.textarea}
+              />
+            </label>
+            <p style={styles.helper}>{trimmedQuery.length}/500 characters</p>
+            <div style={styles.exampleRow}>
+              {examplePrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  style={styles.exampleButton}
+                  onClick={() => setNaturalLanguageQuery(prompt)}
+                  disabled={status === "loading" || status === "paging"}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section style={styles.section}>
+            <h2 style={styles.subheading}>Page Size</h2>
+            <div style={styles.fieldGrid}>
+              <label style={styles.field}>
+                <span>Results per page</span>
                 <input
-                  type="checkbox"
-                  checked={filters.genres.includes(slug)}
-                  onChange={() => toggleGenre(slug)}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={filters.pageSize}
+                  onChange={(event) => updateFilter("pageSize", event.target.value)}
+                  style={styles.input}
                 />
-                <span>{label}</span>
               </label>
-            ))}
+            </div>
+          </section>
+
+          <div style={styles.actionRow}>
+            <button type="submit" style={styles.button} disabled={!naturalLanguageCanSubmit}>
+              {status === "loading" ? "Discovering..." : "Discover movies"}
+            </button>
+            <button type="button" style={styles.secondaryButton} onClick={onNaturalLanguageClear} disabled={status === "loading" || status === "paging"}>
+              Clear
+            </button>
           </div>
-        </section>
+          {!trimmedQuery ? <p style={styles.helper}>Add a specific preference such as genre, language, year, or runtime.</p> : null}
+        </form>
+      ) : (
+        <form onSubmit={onManualSubmit} style={styles.form}>
+          <section style={styles.section}>
+            <h2 style={styles.subheading}>Genres</h2>
+            <div style={styles.genreGrid}>
+              {genreOptions.map(([slug, label]) => (
+                <label key={slug} style={styles.genreChip}>
+                  <input type="checkbox" checked={filters.genres.includes(slug)} onChange={() => toggleGenre(slug)} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+          </section>
 
-        <section style={styles.section}>
-          <h2 style={styles.subheading}>Structured Filters</h2>
-          <div style={styles.fieldGrid}>
-            <label style={styles.field}>
-              <span>Original language</span>
-              <input
-                maxLength={2}
-                value={filters.originalLanguage}
-                onChange={(event) => updateFilter("originalLanguage", event.target.value.toLowerCase())}
-                style={styles.input}
-              />
+          <section style={styles.section}>
+            <h2 style={styles.subheading}>Structured Filters</h2>
+            <div style={styles.fieldGrid}>
+              <label style={styles.field}>
+                <span>Original language</span>
+                <input maxLength={2} value={filters.originalLanguage} onChange={(event) => updateFilter("originalLanguage", event.target.value.toLowerCase())} style={styles.input} />
+              </label>
+              <label style={styles.field}>
+                <span>Region</span>
+                <input maxLength={2} value={filters.region} onChange={(event) => updateFilter("region", event.target.value.toUpperCase())} style={styles.input} />
+              </label>
+              <label style={styles.field}>
+                <span>Release year min</span>
+                <input inputMode="numeric" pattern="[0-9]*" value={filters.releaseYearMin} onChange={(event) => updateFilter("releaseYearMin", event.target.value)} style={styles.input} />
+              </label>
+              <label style={styles.field}>
+                <span>Release year max</span>
+                <input inputMode="numeric" pattern="[0-9]*" value={filters.releaseYearMax} onChange={(event) => updateFilter("releaseYearMax", event.target.value)} style={styles.input} />
+              </label>
+              <label style={styles.field}>
+                <span>Runtime min</span>
+                <input inputMode="numeric" pattern="[0-9]*" value={filters.runtimeMinutesMin} onChange={(event) => updateFilter("runtimeMinutesMin", event.target.value)} style={styles.input} />
+              </label>
+              <label style={styles.field}>
+                <span>Runtime max</span>
+                <input inputMode="numeric" pattern="[0-9]*" value={filters.runtimeMinutesMax} onChange={(event) => updateFilter("runtimeMinutesMax", event.target.value)} style={styles.input} />
+              </label>
+              <label style={styles.field}>
+                <span>Minimum evidence count</span>
+                <input inputMode="numeric" pattern="[0-9]*" value={filters.minimumEvidenceCount} onChange={(event) => updateFilter("minimumEvidenceCount", event.target.value)} style={styles.input} />
+              </label>
+              <label style={styles.field}>
+                <span>Page size</span>
+                <input inputMode="numeric" pattern="[0-9]*" value={filters.pageSize} onChange={(event) => updateFilter("pageSize", event.target.value)} style={styles.input} />
+              </label>
+            </div>
+          </section>
+
+          <section style={styles.section}>
+            <h2 style={styles.subheading}>Availability</h2>
+            <label style={styles.disabledField}>
+              <input type="checkbox" disabled />
+              <span>Regional streaming availability (coming later)</span>
             </label>
-            <label style={styles.field}>
-              <span>Region</span>
-              <input
-                maxLength={2}
-                value={filters.region}
-                onChange={(event) => updateFilter("region", event.target.value.toUpperCase())}
-                style={styles.input}
-              />
-            </label>
-            <label style={styles.field}>
-              <span>Release year min</span>
-              <input
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={filters.releaseYearMin}
-                onChange={(event) => updateFilter("releaseYearMin", event.target.value)}
-                style={styles.input}
-              />
-            </label>
-            <label style={styles.field}>
-              <span>Release year max</span>
-              <input
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={filters.releaseYearMax}
-                onChange={(event) => updateFilter("releaseYearMax", event.target.value)}
-                style={styles.input}
-              />
-            </label>
-            <label style={styles.field}>
-              <span>Runtime min</span>
-              <input
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={filters.runtimeMinutesMin}
-                onChange={(event) => updateFilter("runtimeMinutesMin", event.target.value)}
-                style={styles.input}
-              />
-            </label>
-            <label style={styles.field}>
-              <span>Runtime max</span>
-              <input
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={filters.runtimeMinutesMax}
-                onChange={(event) => updateFilter("runtimeMinutesMax", event.target.value)}
-                style={styles.input}
-              />
-            </label>
-            <label style={styles.field}>
-              <span>Minimum evidence count</span>
-              <input
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={filters.minimumEvidenceCount}
-                onChange={(event) => updateFilter("minimumEvidenceCount", event.target.value)}
-                style={styles.input}
-              />
-            </label>
-            <label style={styles.field}>
-              <span>Page size</span>
-              <input
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={filters.pageSize}
-                onChange={(event) => updateFilter("pageSize", event.target.value)}
-                style={styles.input}
-              />
-            </label>
+            <p style={styles.helper}>This control stays disabled until Phase 2G. The UI never submits availability filters in this phase.</p>
+          </section>
+
+          <div style={styles.actionRow}>
+            <button type="submit" style={styles.button} disabled={!manualCanSubmit}>
+              {status === "loading" ? "Discovering..." : "Discover movies"}
+            </button>
+            <button type="button" style={styles.secondaryButton} onClick={onManualReset} disabled={status === "loading" || status === "paging"}>
+              Reset filters
+            </button>
           </div>
-        </section>
-
-        <section style={styles.section}>
-          <h2 style={styles.subheading}>Availability</h2>
-          <label style={styles.disabledField}>
-            <input type="checkbox" disabled />
-            <span>Regional streaming availability (coming later)</span>
-          </label>
-          <p style={styles.helper}>This control stays disabled until Phase 2G. The UI never submits availability filters in Phase 2D.2.</p>
-        </section>
-
-        <div style={styles.actionRow}>
-          <button type="submit" style={styles.button} disabled={!canSubmit}>
-            {status === "loading" ? "Discovering..." : "Discover movies"}
-          </button>
-          <button type="button" style={styles.secondaryButton} onClick={onReset} disabled={status === "loading"}>
-            Reset filters
-          </button>
-        </div>
-        {!hasMeaningfulNarrowing(filters) ? (
-          <p style={styles.helper}>Add a genre, language, year bound, runtime bound, or minimum evidence count above zero before searching.</p>
-        ) : null}
-      </form>
+          {!hasMeaningfulNarrowing(filters) ? (
+            <p style={styles.helper}>Add a genre, language, year bound, runtime bound, or minimum evidence count above zero before searching.</p>
+          ) : null}
+        </form>
+      )}
 
       {error ? <p style={styles.error}>{error}</p> : null}
 
       <DiscoveryResultsPanel
         response={response}
         status={status}
+        mode={mode}
+        interpretedRequest={summaryRequest}
+        naturalLanguageQuery={lastNaturalLanguageQuery}
         onNextPage={onNextPage}
         onPreviousPage={onPreviousPage}
       />
@@ -430,11 +548,17 @@ export function DiscoveryForm() {
 function DiscoveryResultsPanel({
   response,
   status,
+  mode,
+  interpretedRequest,
+  naturalLanguageQuery,
   onNextPage,
   onPreviousPage,
 }: {
   response: DiscoveryResponse | null;
   status: DiscoveryStatus;
+  mode: DiscoveryMode;
+  interpretedRequest: DiscoveryNormalizedRequest | null;
+  naturalLanguageQuery: string | null;
   onNextPage: () => void;
   onPreviousPage: () => void;
 }) {
@@ -444,24 +568,32 @@ function DiscoveryResultsPanel({
         <div style={styles.headline}>
           <div>
             <p style={styles.eyebrow}>Discovery</p>
-            <h2 style={styles.resultTitle}>Ready for a structured search</h2>
+            <h2 style={styles.resultTitle}>Ready for a movie search</h2>
           </div>
         </div>
-        <p style={styles.overview}>Choose at least one narrowing filter, then submit a provider-neutral discovery request.</p>
+        <p style={styles.overview}>
+          {mode === "natural-language"
+            ? "Describe the kind of movie you want, then let the backend validate and rank the results."
+            : "Choose at least one narrowing filter, then submit a provider-neutral discovery request."}
+        </p>
       </section>
     );
   }
 
-  if (status === "loading") {
+  if (status === "loading" || status === "paging") {
     return (
       <section style={styles.card}>
         <div style={styles.headline}>
           <div>
             <p style={styles.eyebrow}>Discovery</p>
-            <h2 style={styles.resultTitle}>Ranking discovery results…</h2>
+            <h2 style={styles.resultTitle}>{status === "loading" ? "Preparing ranked results…" : "Loading another page…"}</h2>
           </div>
         </div>
-        <p style={styles.overview}>Waiting for the backend to normalize the request and return ranked matches.</p>
+        <p style={styles.overview}>
+          {status === "loading"
+            ? "Waiting for the backend to validate the request and return ranked matches."
+            : "Reusing the stored structured filters and fetching the next ranked page."}
+        </p>
       </section>
     );
   }
@@ -472,7 +604,7 @@ function DiscoveryResultsPanel({
         <div style={styles.headline}>
           <div>
             <p style={styles.eyebrow}>Discovery</p>
-            <h2 style={styles.resultTitle}>No movies matched these filters</h2>
+            <h2 style={styles.resultTitle}>No movies matched this search</h2>
           </div>
         </div>
         <p style={styles.overview}>Try broadening the filters or reducing the minimum evidence count.</p>
@@ -495,19 +627,25 @@ function DiscoveryResultsPanel({
         </div>
       </div>
 
-      <article style={styles.panel}>
-        <h3 style={styles.sectionTitle}>Normalized Request</h3>
-        <p style={styles.small}>Genres: {response.request.genres.length ? response.request.genres.join(", ") : "none"}</p>
-        <p style={styles.small}>Original language: {response.request.original_language ?? "none"}</p>
-        <p style={styles.small}>Region: {response.request.region ?? "none"}</p>
-        <p style={styles.small}>
-          Release years: {response.request.release_year_min ?? "?"} to {response.request.release_year_max ?? "?"}
-        </p>
-        <p style={styles.small}>
-          Runtime: {response.request.runtime_minutes_min ?? "?"} to {response.request.runtime_minutes_max ?? "?"} minutes
-        </p>
-        <p style={styles.small}>Minimum evidence count: {response.request.minimum_evidence_count}</p>
-      </article>
+      {naturalLanguageQuery ? (
+        <article style={styles.panel}>
+          <h3 style={styles.sectionTitle}>Original request</h3>
+          <p style={styles.small}>{naturalLanguageQuery}</p>
+        </article>
+      ) : null}
+
+      {interpretedRequest ? (
+        <article style={styles.panel}>
+          <h3 style={styles.sectionTitle}>{naturalLanguageQuery ? "Interpreted filters" : "Normalized request"}</h3>
+          <div style={styles.filterList}>
+            {activeFilterLabels(interpretedRequest).map((label) => (
+              <span key={label} style={styles.filterBadge}>
+                {label}
+              </span>
+            ))}
+          </div>
+        </article>
+      ) : null}
 
       <div style={styles.paginationRow}>
         <button type="button" style={styles.secondaryButton} onClick={onPreviousPage} disabled={previousDisabled}>
@@ -519,15 +657,11 @@ function DiscoveryResultsPanel({
       </div>
 
       <div style={styles.recommendationList}>
-        {response.results.map((item) => (
+        {response.results.slice(0, 20).map((item) => (
           <article key={`${item.tmdb_source_movie_id}-${item.movie.movie_id}`} style={styles.recommendationCard}>
             <div style={styles.recommendationHeader}>
               {item.movie.poster_url ? (
-                <img
-                  src={item.movie.poster_url}
-                  alt={`${item.movie.canonical_title} poster`}
-                  style={styles.poster}
-                />
+                <img src={item.movie.poster_url} alt={`${item.movie.canonical_title} poster`} style={styles.poster} />
               ) : (
                 <div style={styles.posterFallback}>No poster</div>
               )}
@@ -600,53 +734,15 @@ function DiscoveryResultsPanel({
 }
 
 const styles: Record<string, CSSProperties> = {
-  shell: {
-    maxWidth: 980,
-    margin: "0 auto",
-    display: "grid",
-    gap: 24,
-  },
-  hero: {
-    padding: "32px 32px 12px",
-  },
-  kicker: {
-    margin: 0,
-    color: "var(--accent)",
-    letterSpacing: "0.16em",
-    textTransform: "uppercase",
-    fontSize: 12,
-  },
-  title: {
-    margin: "10px 0 12px",
-    fontSize: "clamp(2.2rem, 5vw, 4rem)",
-  },
-  copy: {
-    margin: 0,
-    maxWidth: 700,
-    color: "var(--muted)",
-    lineHeight: 1.7,
-  },
-  achievementPanel: {
-    display: "grid",
-    gap: 18,
-    padding: "0 32px",
-  },
-  achievementHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 16,
-    alignItems: "end",
-    flexWrap: "wrap",
-  },
-  achievementCopy: {
-    margin: 0,
-    color: "var(--muted)",
-  },
-  achievementGrid: {
-    display: "grid",
-    gap: 14,
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  },
+  shell: { maxWidth: 980, margin: "0 auto", display: "grid", gap: 24 },
+  hero: { padding: "32px 32px 12px" },
+  kicker: { margin: 0, color: "var(--accent)", letterSpacing: "0.16em", textTransform: "uppercase", fontSize: 12 },
+  title: { margin: "10px 0 12px", fontSize: "clamp(2.2rem, 5vw, 4rem)" },
+  copy: { margin: 0, maxWidth: 700, color: "var(--muted)", lineHeight: 1.7 },
+  achievementPanel: { display: "grid", gap: 18, padding: "0 32px" },
+  achievementHeader: { display: "flex", justifyContent: "space-between", gap: 16, alignItems: "end", flexWrap: "wrap" },
+  achievementCopy: { margin: 0, color: "var(--muted)" },
+  achievementGrid: { display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" },
   achievementCard: {
     borderRadius: 22,
     padding: "18px 20px",
@@ -654,80 +750,57 @@ const styles: Record<string, CSSProperties> = {
     border: "1px solid rgba(141,46,22,0.14)",
     boxShadow: "0 18px 40px rgba(86, 42, 16, 0.08)",
   },
-  achievementLabel: {
-    margin: 0,
-    color: "var(--accent)",
-    textTransform: "uppercase",
-    letterSpacing: "0.12em",
-    fontSize: 11,
-  },
-  achievementValue: {
-    display: "block",
-    marginTop: 8,
-    fontSize: "clamp(1rem, 2vw, 1.25rem)",
-  },
-  form: {
-    display: "grid",
-    gap: 20,
-    borderRadius: 28,
-    background: "var(--panel)",
-    boxShadow: "var(--shadow)",
-    padding: 32,
-  },
-  section: {
-    display: "grid",
-    gap: 14,
-  },
-  subheading: {
-    margin: 0,
-    fontSize: "clamp(1.2rem, 2vw, 1.5rem)",
-  },
-  genreGrid: {
-    display: "grid",
-    gap: 10,
-    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-  },
-  genreChip: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "12px 14px",
-    borderRadius: 18,
-    background: "rgba(255,255,255,0.58)",
+  achievementLabel: { margin: 0, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.12em", fontSize: 11 },
+  achievementValue: { display: "block", marginTop: 8, fontSize: "clamp(1rem, 2vw, 1.25rem)" },
+  modeToggle: { display: "flex", gap: 12, padding: "0 32px", flexWrap: "wrap" },
+  modeButton: {
+    minHeight: 44,
+    borderRadius: 999,
     border: "1px solid var(--line)",
+    background: "rgba(255,255,255,0.7)",
+    color: "var(--text)",
+    padding: "0 18px",
+    cursor: "pointer",
   },
-  fieldGrid: {
-    display: "grid",
-    gap: 16,
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  activeModeButton: {
+    minHeight: 44,
+    borderRadius: 999,
+    border: "1px solid rgba(141,46,22,0.2)",
+    background: "linear-gradient(135deg, rgba(141,46,22,0.16) 0%, rgba(200,95,51,0.16) 100%)",
+    color: "var(--text)",
+    padding: "0 18px",
+    cursor: "pointer",
   },
-  field: {
-    display: "grid",
-    gap: 8,
-  },
-  input: {
-    minHeight: 48,
+  form: { display: "grid", gap: 20, borderRadius: 28, background: "var(--panel)", boxShadow: "var(--shadow)", padding: 32 },
+  section: { display: "grid", gap: 14 },
+  subheading: { margin: 0, fontSize: "clamp(1.2rem, 2vw, 1.5rem)" },
+  genreGrid: { display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" },
+  genreChip: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 18, background: "rgba(255,255,255,0.58)", border: "1px solid var(--line)" },
+  fieldGrid: { display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" },
+  field: { display: "grid", gap: 8 },
+  input: { minHeight: 48, borderRadius: 16, border: "1px solid var(--line)", padding: "0 14px", background: "rgba(255,255,255,0.78)" },
+  textarea: {
+    minHeight: 128,
     borderRadius: 16,
     border: "1px solid var(--line)",
-    padding: "0 14px",
+    padding: "14px",
     background: "rgba(255,255,255,0.78)",
+    resize: "vertical",
+    font: "inherit",
   },
-  disabledField: {
-    display: "flex",
-    gap: 10,
-    alignItems: "center",
-    color: "var(--muted)",
+  exampleRow: { display: "flex", gap: 10, flexWrap: "wrap" },
+  exampleButton: {
+    borderRadius: 999,
+    border: "1px solid var(--line)",
+    background: "rgba(255,255,255,0.7)",
+    color: "var(--text)",
+    padding: "10px 14px",
+    cursor: "pointer",
+    textAlign: "left",
   },
-  helper: {
-    margin: 0,
-    color: "var(--muted)",
-    lineHeight: 1.6,
-  },
-  actionRow: {
-    display: "flex",
-    gap: 12,
-    flexWrap: "wrap",
-  },
+  disabledField: { display: "flex", gap: 10, alignItems: "center", color: "var(--muted)" },
+  helper: { margin: 0, color: "var(--muted)", lineHeight: 1.6 },
+  actionRow: { display: "flex", gap: 12, flexWrap: "wrap" },
   button: {
     minHeight: 48,
     borderRadius: 999,
@@ -754,72 +827,25 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 18,
     padding: "14px 18px",
   },
-  card: {
-    display: "grid",
-    gap: 20,
-    borderRadius: 28,
-    background: "var(--panel)",
-    boxShadow: "var(--shadow)",
-    padding: 32,
-  },
-  headline: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 16,
-    alignItems: "start",
-    flexWrap: "wrap",
-  },
-  eyebrow: {
-    margin: 0,
-    color: "var(--accent)",
-    textTransform: "uppercase",
-    letterSpacing: "0.16em",
-    fontSize: 12,
-  },
-  resultTitle: {
-    margin: "8px 0",
-    fontSize: "clamp(2rem, 4vw, 3rem)",
-  },
-  meta: {
-    margin: 0,
-    color: "var(--muted)",
-  },
-  overview: {
-    margin: 0,
-    lineHeight: 1.6,
-    color: "var(--muted)",
-  },
-  paginationRow: {
-    display: "flex",
-    gap: 12,
-    flexWrap: "wrap",
-  },
-  recommendationList: {
-    display: "grid",
-    gap: 20,
-  },
-  recommendationCard: {
-    display: "grid",
-    gap: 16,
-    borderRadius: 24,
-    padding: 24,
-    background: "rgba(255,255,255,0.58)",
+  card: { display: "grid", gap: 20, borderRadius: 28, background: "var(--panel)", boxShadow: "var(--shadow)", padding: 32 },
+  headline: { display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", flexWrap: "wrap" },
+  eyebrow: { margin: 0, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.16em", fontSize: 12 },
+  resultTitle: { margin: "8px 0", fontSize: "clamp(2rem, 4vw, 3rem)" },
+  meta: { margin: 0, color: "var(--muted)" },
+  overview: { margin: 0, lineHeight: 1.6, color: "var(--muted)" },
+  filterList: { display: "flex", gap: 10, flexWrap: "wrap" },
+  filterBadge: {
+    borderRadius: 999,
     border: "1px solid var(--line)",
+    background: "rgba(255,255,255,0.75)",
+    padding: "8px 12px",
+    color: "var(--text)",
   },
-  recommendationHeader: {
-    display: "grid",
-    gridTemplateColumns: "88px minmax(0, 1fr)",
-    gap: 16,
-    alignItems: "start",
-  },
-  poster: {
-    width: 88,
-    height: 132,
-    objectFit: "cover",
-    borderRadius: 16,
-    background: "rgba(255,255,255,0.8)",
-    border: "1px solid var(--line)",
-  },
+  paginationRow: { display: "flex", gap: 12, flexWrap: "wrap" },
+  recommendationList: { display: "grid", gap: 20 },
+  recommendationCard: { display: "grid", gap: 16, borderRadius: 24, padding: 24, background: "rgba(255,255,255,0.58)", border: "1px solid var(--line)" },
+  recommendationHeader: { display: "grid", gridTemplateColumns: "88px minmax(0, 1fr)", gap: 16, alignItems: "start" },
+  poster: { width: 88, height: 132, objectFit: "cover", borderRadius: 16, background: "rgba(255,255,255,0.8)", border: "1px solid var(--line)" },
   posterFallback: {
     width: 88,
     height: 132,
@@ -833,43 +859,12 @@ const styles: Record<string, CSSProperties> = {
     textAlign: "center",
     padding: 8,
   },
-  recommendationIntro: {
-    minWidth: 0,
-  },
-  recommendationTitle: {
-    margin: "6px 0 8px",
-    fontSize: "clamp(1.5rem, 3vw, 2rem)",
-  },
-  grid: {
-    display: "grid",
-    gap: 16,
-    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-  },
-  panel: {
-    border: "1px solid var(--line)",
-    borderRadius: 20,
-    padding: 20,
-    background: "rgba(255,255,255,0.55)",
-  },
-  sectionTitle: {
-    marginTop: 0,
-    marginBottom: 12,
-  },
-  list: {
-    listStyle: "none",
-    padding: 0,
-    margin: 0,
-    display: "grid",
-    gap: 10,
-  },
-  item: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  small: {
-    margin: "6px 0",
-    color: "var(--muted)",
-    lineHeight: 1.5,
-  },
+  recommendationIntro: { minWidth: 0 },
+  recommendationTitle: { margin: "6px 0 8px", fontSize: "clamp(1.5rem, 3vw, 2rem)" },
+  grid: { display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" },
+  panel: { border: "1px solid var(--line)", borderRadius: 20, padding: 20, background: "rgba(255,255,255,0.55)" },
+  sectionTitle: { marginTop: 0, marginBottom: 12 },
+  list: { listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 10 },
+  item: { display: "flex", justifyContent: "space-between", gap: 12 },
+  small: { margin: "6px 0", color: "var(--muted)", lineHeight: 1.5 },
 };

@@ -114,49 +114,81 @@ export type DiscoveryRequestPayload = {
   page_size: number;
 };
 
+export type DiscoveryNormalizedRequest = {
+  media_type: "movie";
+  genres: string[];
+  original_language: string | null;
+  region: string | null;
+  release_year_min: number | null;
+  release_year_max: number | null;
+  runtime_minutes_min: number | null;
+  runtime_minutes_max: number | null;
+  minimum_evidence_count: number;
+  availability_required: boolean;
+  page: number;
+  page_size: number;
+};
+
+export type DiscoveryResult = {
+  movie: {
+    movie_id: string;
+    canonical_title: string;
+    release_year: number | null;
+    media_type: string;
+    original_language: string | null;
+    overview: string | null;
+    poster_url: string | null;
+  };
+  tmdb_source_movie_id: string;
+  provider_position: number;
+  score: number;
+  score_version: string;
+  score_components: Record<string, number | null>;
+  missing_signals: string[];
+  provenance: {
+    source: string;
+    source_movie_id: string;
+    source_url: string | null;
+  };
+  freshness: Record<string, string>;
+};
+
+export type DiscoveryPage = {
+  page: number;
+  requested_page_size: number;
+  returned_count: number;
+  max_page_size: 20;
+};
+
 export type DiscoveryResponse = {
   status: "ok";
-  request: {
-    media_type: "movie";
-    genres: string[];
-    original_language: string | null;
-    region: string | null;
-    release_year_min: number | null;
-    release_year_max: number | null;
-    runtime_minutes_min: number | null;
-    runtime_minutes_max: number | null;
-    minimum_evidence_count: number;
-    availability_required: boolean;
-    page: number;
-    page_size: number;
-  };
-  results: Array<{
-    movie: {
-      movie_id: string;
-      canonical_title: string;
-      release_year: number | null;
-      media_type: string;
-      original_language: string | null;
-      overview: string | null;
-      poster_url: string | null;
-    };
-    tmdb_source_movie_id: string;
-    provider_position: number;
-    score: number;
-    score_version: string;
-    score_components: Record<string, number | null>;
-    missing_signals: string[];
-    provenance: {
-      source: string;
-      source_movie_id: string;
-      source_url: string | null;
-    };
-    freshness: Record<string, string>;
-  }>;
-  page: {
-    page: number;
-    requested_page_size: number;
-    returned_count: number;
-    max_page_size: 20;
-  };
+  request: DiscoveryNormalizedRequest;
+  results: DiscoveryResult[];
+  page: DiscoveryPage;
+};
+
+export type NaturalLanguageDiscoveryRequestPayload = {
+  query: string;
+  page: number;
+  page_size: number;
+};
+
+export type NaturalLanguageDiscoveryResponse = {
+  status: "ok";
+  query: string;
+  interpreted_request: DiscoveryNormalizedRequest;
+  results: DiscoveryResult[];
+  page: DiscoveryPage;
+};
+
+export type ControlledErrorResponse = {
+  detail?:
+    | string
+    | {
+        error?: string;
+        filter?: string;
+      }
+    | Array<{
+        msg?: string;
+      }>;
 };

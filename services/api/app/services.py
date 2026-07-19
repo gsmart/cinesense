@@ -18,7 +18,11 @@ from app.adapters.tmdb import (
 )
 from app.core.config import get_settings
 from app.core.freshness import FreshnessState, FreshnessWindow, evaluate_freshness
-from app.interpreters import NaturalLanguageDiscoveryInterpreter
+from app.interpreters import (
+    InterpreterFailureError,
+    InterpreterUnavailableError,
+    NaturalLanguageDiscoveryInterpreter,
+)
 from app.core.normalization import normalize_region, normalize_title
 from app.core.scoring import compute_cine_score_v1
 from app.models.movie import ExternalId, Movie, MovieAlias, Observation
@@ -201,6 +205,16 @@ class LookupService:
     ) -> dict:
         try:
             untrusted = await interpreter.interpret(request)
+        except InterpreterUnavailableError:
+            return {
+                "status": "interpreter_unavailable",
+                "query": request.query,
+            }
+        except InterpreterFailureError:
+            return {
+                "status": "interpreter_failure",
+                "query": request.query,
+            }
         except Exception:
             return {
                 "status": "interpreter_failure",

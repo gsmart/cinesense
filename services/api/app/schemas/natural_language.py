@@ -1,6 +1,8 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.schemas.discovery import MAX_PAGE_SIZE
+from app.schemas.discovery import DiscoveryPageMetadata, DiscoveryRequest, DiscoveryResultResponse, MAX_PAGE_SIZE
 
 MAX_QUERY_LENGTH = 500
 
@@ -19,3 +21,11 @@ class NaturalLanguageDiscoveryRequest(BaseModel):
         if not cleaned:
             raise ValueError("query must not be empty")
         return cleaned
+
+
+class NaturalLanguageDiscoveryResponse(BaseModel):
+    status: Literal["ok"]
+    query: str
+    interpreted_request: DiscoveryRequest
+    results: list[DiscoveryResultResponse]
+    page: DiscoveryPageMetadata

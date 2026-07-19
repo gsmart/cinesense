@@ -4,12 +4,18 @@ from sqlalchemy.orm import Session
 from app.adapters.tmdb import TmdbAdapter
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.interpreters import NaturalLanguageDiscoveryInterpreter, get_live_natural_language_discovery_interpreter
 from app.schemas.discovery import DiscoveryRequest, DiscoveryResponse
 from app.schemas.lookup import LookupRequest, LookupResponse
+from app.schemas.natural_language import NaturalLanguageDiscoveryRequest, NaturalLanguageDiscoveryResponse
 from app.schemas.recommendations import RecommendationsRequest, RecommendationsResponse
 from app.services import LookupService
 
 router = APIRouter(tags=["lookup"])
+
+
+def get_natural_language_discovery_interpreter() -> NaturalLanguageDiscoveryInterpreter:
+    return get_live_natural_language_discovery_interpreter(get_settings())
 
 
 @router.post("/lookup", response_model=LookupResponse)
@@ -78,3 +84,37 @@ async def discover_movies(payload: DiscoveryRequest, db: Session = Depends(get_d
         result["page"]["returned_count"] = min(result["page"].get("returned_count", len(result["results"])), len(result["results"]))
     result["request"] = payload.model_dump()
     return DiscoveryResponse.model_validate(result)
+
+
+@router.post("/discover/natural-language", response_model=NaturalLanguageDiscoveryResponse)
+async def discover_movies_natural_language(
+    payload: NaturalLanguageDiscoveryRequest,
+    db: Session = Depends(get_db),
+    interpreter: NaturalLanguageDiscoveryInterpreter = Depends(get_natural_language_discovery_interpreter),
+) -> NaturalLanguageDiscoveryResponse:
+    service = LookupService(db, TmdbAdapter(get_settings()))
+    result = await service.discover_from_natural_language(request=payload, interpreter=interpreter)
+
+    status = result["status"]
+    if status == "interpreter_unavailable":
+        raise HTTPException(status_code=503, detail={"error": "interpreter_unavailable"})
+    if status == "interpreter_failure":
+        raise HTTPException(status_code=502, detail={"error": "interpreter_failure"})
+    if status == "invalid_interpretation":
+        raise HTTPException(status_code=422, detail={"error": "invalid_interpretation"})
+    if status == "unrestricted_interpretation":
+        raise HTTPException(status_code=422, detail={"error": "unrestricted_interpretation"})
+    if status == "unsupported_filter":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "unsupported_filter",
+                "filter": result.get("unsupported_filter", "availability_required"),
+            },
+        )
+
+    result["results"] = result.get("results", [])[:20]
+    if "page" in result:
+        result["page"]["returned_count"] = min(result["page"].get("returned_count", len(result["results"])), len(result["results"]))
+    result["interpreted_request"] = result.pop("request")
+    return NaturalLanguageDiscoveryResponse.model_validate(result)

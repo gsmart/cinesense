@@ -19,6 +19,11 @@ class Settings(BaseSettings):
         default=None,
         alias="TMDB_API_READ_ACCESS_TOKEN",
     )
+    cinesense_llm_enabled: bool = Field(default=False, alias="CINESENSE_LLM_ENABLED")
+    cinesense_llm_base_url: str | None = Field(default=None, alias="CINESENSE_LLM_BASE_URL")
+    cinesense_llm_api_key: str | None = Field(default=None, alias="CINESENSE_LLM_API_KEY")
+    cinesense_llm_model: str | None = Field(default=None, alias="CINESENSE_LLM_MODEL")
+    cinesense_llm_timeout_seconds: float = Field(default=10.0, alias="CINESENSE_LLM_TIMEOUT_SECONDS", gt=0, le=30)
     api_timeout_seconds: float = 10.0
     metadata_fresh_days: int = 30
     metadata_stale_days: int = 90
@@ -32,4 +37,3 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-
