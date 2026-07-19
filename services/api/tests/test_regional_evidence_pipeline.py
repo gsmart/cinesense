@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from app.adapters.tmdb import TmdbCandidate
 from app.core.config import Settings
 from app.regional_evidence import (
+    DefaultWikidataClient,
     RECOGNITION_AMBIGUOUS,
     RECOGNITION_EXACT,
     RECOGNITION_NONE,
@@ -15,6 +17,8 @@ from app.regional_evidence import (
     WIKIDATA_ERROR,
     WIKIDATA_EXACT,
     WIKIDATA_NONE,
+    WIKIDATA_ACCEPT,
+    WikidataFetchError,
     RegionalEvidencePipeline,
     build_recognition_match_candidates,
     load_national_awards_records,
@@ -86,6 +90,43 @@ class FakeWikidata:
             if tmdb_id in self.responses:
                 rows[tmdb_id] = self.responses[tmdb_id]
         return rows, "wikidata-hash", "2026-07-19T00:00:00+00:00"
+
+
+class StubResponse:
+    def __init__(self, status_code=200, *, headers=None, json_payload=None, text=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._json_payload = json_payload
+        self._text = text if text is not None else json.dumps(json_payload or {})
+        self.content = self._text.encode("utf-8")
+
+    @property
+    def text(self):
+        return self._text
+
+    def json(self):
+        if isinstance(self._json_payload, Exception):
+            raise self._json_payload
+        return self._json_payload
+
+
+class StubAsyncClient:
+    def __init__(self, responses, recorded_requests):
+        self._responses = responses
+        self._recorded_requests = recorded_requests
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, url, *, params=None, headers=None):
+        self._recorded_requests.append({"url": url, "params": params, "headers": headers})
+        next_item = self._responses.pop(0)
+        if isinstance(next_item, Exception):
+            raise next_item
+        return next_item
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -291,3 +332,125 @@ def test_manifest_contains_hashes_and_partial_failures_preserve_outputs_and_secr
     for path in (tmp_path / "run").iterdir():
         contents = path.read_text(encoding="utf-8")
         assert "super-secret-token" not in contents
+
+
+def test_default_wikidata_client_uses_configured_headers_and_parses_exact_matches(monkeypatch):
+    recorded_requests = []
+    responses = [
+        StubResponse(
+            status_code=200,
+            headers={"content-type": "application/sparql-results+json;charset=utf-8"},
+            json_payload={
+                "results": {
+                    "bindings": [
+                        {
+                            "item": {"value": "http://www.wikidata.org/entity/Q1"},
+                            "tmdbId": {"value": "1"},
+                            "label": {"value": "Sairat"},
+                            "labelLang": {"value": "en"},
+                        }
+                    ]
+                }
+            },
+        )
+    ]
+    monkeypatch.setattr(
+        "app.regional_evidence.httpx.AsyncClient",
+        lambda *args, **kwargs: StubAsyncClient(responses, recorded_requests),
+    )
+    client = DefaultWikidataClient(settings=Settings(WIKIDATA_USER_AGENT="configured-agent", WIKIDATA_SPARQL_ENDPOINT="https://example.test/sparql"))
+
+    grouped, _, _ = asyncio.run(client.fetch_by_tmdb_ids(["1"]))
+
+    assert grouped["1"][0]["item"]["value"].endswith("Q1")
+    assert recorded_requests[0]["url"] == "https://example.test/sparql"
+    assert recorded_requests[0]["headers"]["user-agent"] == "configured-agent"
+    assert recorded_requests[0]["headers"]["accept"] == WIKIDATA_ACCEPT
+
+
+def test_default_wikidata_client_retries_429_and_5xx(monkeypatch):
+    recorded_requests = []
+    sleep_calls = []
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+    responses = [
+        StubResponse(status_code=429, headers={"Retry-After": "0", "content-type": "text/plain"}, text="rate limited"),
+        StubResponse(
+            status_code=200,
+            headers={"content-type": "application/sparql-results+json"},
+            json_payload={"results": {"bindings": []}},
+        ),
+        StubResponse(status_code=503, headers={"content-type": "text/plain"}, text="unavailable"),
+        StubResponse(
+            status_code=200,
+            headers={"content-type": "application/sparql-results+json"},
+            json_payload={"results": {"bindings": []}},
+        ),
+    ]
+    monkeypatch.setattr(
+        "app.regional_evidence.httpx.AsyncClient",
+        lambda *args, **kwargs: StubAsyncClient(responses, recorded_requests),
+    )
+    monkeypatch.setattr("app.regional_evidence.asyncio.sleep", fake_sleep)
+    client = DefaultWikidataClient(settings=make_settings())
+
+    asyncio.run(client.fetch_by_tmdb_ids(["1"]))
+    asyncio.run(client.fetch_by_tmdb_ids(["2"]))
+
+    assert len(recorded_requests) == 4
+    assert sleep_calls == [0.0, 1.0]
+
+
+def test_default_wikidata_client_reports_controlled_source_errors(monkeypatch):
+    cases = [
+        (httpx.TimeoutException("timeout"), "timeout"),
+        (StubResponse(status_code=403, headers={"content-type": "text/plain"}, text="blocked"), "http_403"),
+        (
+            StubResponse(
+                status_code=200,
+                headers={"content-type": "text/plain"},
+                text="not sparql json",
+                json_payload={"results": {"bindings": []}},
+            ),
+            "unexpected_content_type",
+        ),
+        (
+            StubResponse(
+                status_code=200,
+                headers={"content-type": "application/sparql-results+json"},
+                json_payload=json.JSONDecodeError("bad", "x", 0),
+                text="{bad",
+            ),
+            "malformed_json",
+        ),
+    ]
+
+    for payload, expected in cases:
+        responses = [payload]
+        monkeypatch.setattr(
+            "app.regional_evidence.httpx.AsyncClient",
+            lambda *args, **kwargs: StubAsyncClient(responses, []),
+        )
+        client = DefaultWikidataClient(settings=make_settings())
+        with pytest.raises(WikidataFetchError, match=expected):
+            asyncio.run(client.fetch_by_tmdb_ids(["1"]))
+
+
+def test_failed_wikidata_batch_preserves_successful_batches_and_is_deterministic(tmp_path):
+    pages = {
+        ("mr", 1): [make_candidate(str(index), f"Movie {index}", original_language="mr", provider_position=index - 1) for index in range(1, 22)]
+    }
+    tmdb = FakeTmdb(pages)
+    success_rows = {str(index): [{"item": {"value": f"http://www.wikidata.org/entity/Q{index}"}, "tmdbId": {"value": str(index)}, "label": {"value": f"Movie {index}"}, "labelLang": {"value": "en"}}] for index in range(1, 21)}
+    wikidata = FakeWikidata(responses=success_rows, errors=[tuple(str(index) for index in range(21, 22))])
+    pipeline = RegionalEvidencePipeline(settings=Settings(TMDB_API_READ_ACCESS_TOKEN="token", WIKIDATA_BATCH_SIZE=20), tmdb=tmdb, wikidata=wikidata)
+
+    asyncio.run(pipeline.build(languages=["mr"], limit_per_language=21, output_dir=tmp_path / "run"))
+
+    records = read_jsonl(tmp_path / "run" / "wikidata_matches.jsonl")
+    assert len(records) == 21
+    assert [record["tmdb_source_movie_id"] for record in records] == [str(index) for index in range(1, 22)]
+    assert sum(1 for record in records if record["match_status"] == WIKIDATA_EXACT) == 20
+    error_record = next(record for record in records if record["tmdb_source_movie_id"] == "21")
+    assert error_record["match_status"] == WIKIDATA_ERROR
+    assert error_record["warnings"] == ["wikidata_batch_failed:unexpected_error"]

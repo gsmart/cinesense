@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import json
@@ -7,6 +8,7 @@ import re
 import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Protocol
 from zipfile import ZipFile
@@ -22,7 +24,9 @@ DEFAULT_LANGUAGES = ("mr", "ml", "ta")
 DEFAULT_LIMIT_PER_LANGUAGE = 50
 DEFAULT_OUTPUT_ROOT = Path("/tmp/cinesense-regional-evidence")
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
-WIKIDATA_USER_AGENT = "cineSense-regional-evidence/0.1"
+WIKIDATA_USER_AGENT = "cineSenseRegionalEvidence/0.1 (https://github.com/gsmart/cinesense)"
+WIKIDATA_ACCEPT = "application/sparql-results+json"
+WIKIDATA_MAX_RETRIES = 1
 
 WIKIDATA_EXACT = "EXACT_IDENTIFIER_MATCH"
 WIKIDATA_NONE = "NO_MATCH"
@@ -56,21 +60,59 @@ class AwardsRecord:
     language: str | None
 
 
+class WikidataFetchError(RuntimeError):
+    def __init__(self, category: str) -> None:
+        super().__init__(category)
+        self.category = category
+
+
 class DefaultWikidataClient:
     def __init__(self, *, settings: Settings) -> None:
         self.settings = settings
 
     async def fetch_by_tmdb_ids(self, tmdb_ids: list[str]) -> tuple[dict[str, list[dict[str, Any]]], str, str]:
         query = self._query_for_tmdb_ids(tmdb_ids)
-        async with httpx.AsyncClient(timeout=self.settings.api_timeout_seconds, trust_env=False) as client:
-            response = await client.get(
-                WIKIDATA_SPARQL_URL,
-                params={"query": query, "format": "json"},
-                headers={"accept": "application/sparql-results+json", "user-agent": WIKIDATA_USER_AGENT},
-            )
-            response.raise_for_status()
-            body = response.content
-            payload = response.json()
+        last_error: WikidataFetchError | None = None
+        for attempt in range(WIKIDATA_MAX_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self.settings.wikidata_timeout_seconds, trust_env=False) as client:
+                    response = await client.get(
+                        self.settings.wikidata_sparql_endpoint,
+                        params={"query": query, "format": "json"},
+                        headers={"accept": WIKIDATA_ACCEPT, "user-agent": self.settings.wikidata_user_agent},
+                    )
+                if response.status_code == 429 and attempt < WIKIDATA_MAX_RETRIES:
+                    await asyncio.sleep(_retry_delay_seconds(response.headers.get("Retry-After")))
+                    continue
+                if 500 <= response.status_code < 600 and attempt < WIKIDATA_MAX_RETRIES:
+                    await asyncio.sleep(1.0)
+                    continue
+                if response.status_code >= 400:
+                    raise WikidataFetchError(f"http_{response.status_code}")
+                content_type = response.headers.get("content-type", "")
+                if WIKIDATA_ACCEPT not in content_type and "application/json" not in content_type:
+                    raise WikidataFetchError("unexpected_content_type")
+                body = response.content
+                try:
+                    payload = response.json()
+                except json.JSONDecodeError as exc:
+                    raise WikidataFetchError("malformed_json") from exc
+                bindings = payload.get("results", {}).get("bindings")
+                if not isinstance(bindings, list):
+                    raise WikidataFetchError("unexpected_response_shape")
+                break
+            except WikidataFetchError as exc:
+                last_error = exc
+                if exc.category.startswith("http_5") and attempt < WIKIDATA_MAX_RETRIES:
+                    await asyncio.sleep(1.0)
+                    continue
+                raise
+            except httpx.TimeoutException as exc:
+                raise WikidataFetchError("timeout") from exc
+            except httpx.HTTPError as exc:
+                raise WikidataFetchError("transport_error") from exc
+        else:
+            raise last_error or WikidataFetchError("unexpected_error")
 
         grouped: dict[str, list[dict[str, Any]]] = {}
         for binding in payload.get("results", {}).get("bindings", []):
@@ -271,12 +313,19 @@ class RegionalEvidencePipeline:
         response_hashes: dict[str, str] = {}
         fetched_times: dict[str, str] = {}
         errors: set[str] = set()
-        for chunk in _chunked(tmdb_ids, 20):
+        error_categories: dict[str, str] = {}
+        for chunk in _chunked(tmdb_ids, self.settings.wikidata_batch_size):
             try:
                 rows, response_hash, fetched_at = await self.wikidata.fetch_by_tmdb_ids(chunk)
+            except WikidataFetchError as exc:
+                for tmdb_id in chunk:
+                    errors.add(tmdb_id)
+                    error_categories[tmdb_id] = exc.category
+                continue
             except Exception:
                 for tmdb_id in chunk:
                     errors.add(tmdb_id)
+                    error_categories[tmdb_id] = "unexpected_error"
                 continue
             for tmdb_id, values in rows.items():
                 grouped_rows[tmdb_id] = values
@@ -297,7 +346,7 @@ class RegionalEvidencePipeline:
                         "raw_response_hash": None,
                         "parser_version": SCRIPT_VERSION,
                         "match_status": WIKIDATA_ERROR,
-                        "warnings": ["wikidata_batch_failed"],
+                        "warnings": [f"wikidata_batch_failed:{error_categories.get(tmdb_id, 'unknown_error')}"],
                         "wikidata_qid": None,
                         "english_label": None,
                         "titles": [],
@@ -710,6 +759,20 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def _sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _retry_delay_seconds(retry_after: str | None) -> float:
+    if not retry_after:
+        return 1.0
+    value = retry_after.strip()
+    if value.isdigit():
+        return max(0.0, float(value))
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return 1.0
+    now = datetime.now(UTC)
+    return max(0.0, round((parsed - now).total_seconds(), 3))
 
 
 def _chunked(values: list[str], size: int) -> list[list[str]]:

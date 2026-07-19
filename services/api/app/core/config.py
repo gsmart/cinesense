@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     shadow_ranking_version: str = Field(default="disabled", alias="CINESENSE_SHADOW_RANKING_VERSION")
     fallback_ranking_version: str = Field(default="cine-score-v1", alias="CINESENSE_FALLBACK_RANKING_VERSION")
     api_timeout_seconds: float = 10.0
+    wikidata_sparql_endpoint: str = Field(
+        default="https://query.wikidata.org/sparql",
+        alias="WIKIDATA_SPARQL_ENDPOINT",
+    )
+    wikidata_user_agent: str = Field(
+        default="cineSenseRegionalEvidence/0.1 (https://github.com/gsmart/cinesense)",
+        alias="WIKIDATA_USER_AGENT",
+    )
+    wikidata_batch_size: int = Field(default=20, alias="WIKIDATA_BATCH_SIZE", gt=0, le=50)
+    wikidata_timeout_seconds: float = Field(default=10.0, alias="WIKIDATA_TIMEOUT_SECONDS", gt=0, le=30)
     metadata_fresh_days: int = 30
     metadata_stale_days: int = 90
     popularity_fresh_hours: int = 24
