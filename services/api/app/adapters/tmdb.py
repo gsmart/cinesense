@@ -50,8 +50,11 @@ class TmdbCandidate:
     title: str
     normalized_title: str
     release_year: int | None
-    original_language: str | None
-    popularity: float | None
+    release_date: str | None = None
+    original_title: str | None = None
+    original_language: str | None = None
+    popularity: float | None = None
+    genre_ids: list[int] | None = None
     vote_average: float | None = None
     vote_count: int | None = None
     rating_scale: str | None = None
@@ -290,8 +293,11 @@ class TmdbAdapter:
                     title=title,
                     normalized_title=normalize_title(title),
                     release_year=release_year,
+                    release_date=self._normalize_optional_text(result.get("release_date")),
+                    original_title=self._normalize_optional_text(result.get("original_title")),
                     original_language=self._normalize_optional_text(result.get("original_language")),
                     popularity=self._normalize_popularity(result.get("popularity")),
+                    genre_ids=result.get("genre_ids") if isinstance(result.get("genre_ids"), list) else None,
                     vote_average=self._normalize_vote_average(result.get("vote_average")),
                     vote_count=self._normalize_vote_count(result.get("vote_count")),
                     rating_scale="0-10" if self._normalize_vote_average(result.get("vote_average")) is not None else None,
@@ -348,8 +354,11 @@ class TmdbAdapter:
                     title=title,
                     normalized_title=normalize_title(title),
                     release_year=self._release_year_from_date(result.get("release_date")),
+                    release_date=self._normalize_optional_text(result.get("release_date")),
+                    original_title=self._normalize_optional_text(result.get("original_title")),
                     original_language=self._normalize_optional_text(result.get("original_language")),
                     popularity=self._normalize_popularity(result.get("popularity")),
+                    genre_ids=result.get("genre_ids") if isinstance(result.get("genre_ids"), list) else None,
                     vote_average=vote_average,
                     vote_count=self._normalize_vote_count(result.get("vote_count")),
                     rating_scale="0-10" if vote_average is not None else None,
@@ -413,9 +422,12 @@ class TmdbAdapter:
                     title=title,
                     normalized_title=normalize_title(title),
                     release_year=release_year,
+                    release_date=self._normalize_optional_text(result.get("release_date")),
+                    original_title=self._normalize_optional_text(result.get("original_title")),
                     media_type="movie",
                     original_language=self._normalize_optional_text(result.get("original_language")),
                     popularity=self._normalize_popularity(result.get("popularity")),
+                    genre_ids=result.get("genre_ids") if isinstance(result.get("genre_ids"), list) else None,
                     vote_average=vote_average,
                     vote_count=vote_count,
                     rating_scale="0-10" if vote_average is not None else None,
