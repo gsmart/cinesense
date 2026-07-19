@@ -7,7 +7,8 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.scoring import compute_cine_score_v1
+from app.core.config import get_settings
+from app.core.ranking import build_ranking_input, compare_rankings, compute_ranking
 from app.models.movie import Movie, Observation
 
 FixtureClassification = Literal["synthetic", "captured_local_observation"]
@@ -88,7 +89,7 @@ def run_ranking_audit_case(case: RankingAuditCase) -> RankingAuditResult:
     if case.popularity is None:
         missing_signals.append("popularity")
 
-    score = compute_cine_score_v1(
+    ranking_input = build_ranking_input(
         normalized_query=case.normalized_query,
         canonical_title=case.canonical_title,
         release_year=case.release_year,
@@ -98,14 +99,16 @@ def run_ranking_audit_case(case: RankingAuditCase) -> RankingAuditResult:
         popularity=case.popularity,
         missing_signals=missing_signals,
         seed_relevance=1.0,
+        case_id=case.case_id,
     )
-    components = score["components"]
+    score = compute_ranking(ranking_input, requested_version=get_settings().active_ranking_version, settings=get_settings())
+    components = score.components
     return RankingAuditResult(
         case=case,
-        version=score["version"],
-        total=score["total"],
+        version=score.applied_ranking_version,
+        total=score.total,
         components=components,
-        missing_signals=score["missing_signals"],
+        missing_signals=score.missing_signals,
         raw_audience_value=case.vote_average,
         evidence_count=case.vote_count,
         raw_popularity=case.popularity,
@@ -375,6 +378,53 @@ def order_results_within_groups(results: list[RankingAuditResult]) -> dict[str, 
     for group_id, group_results in grouped.items():
         grouped[group_id] = sorted(group_results, key=lambda item: (-item.total, item.case.case_id))
     return grouped
+
+
+def compare_regional_ranking_versions(cases: list[RankingAuditCase] | None = None) -> list[dict[str, object]]:
+    ranking_cases = cases or build_synthetic_regional_ranking_fixtures()
+    ranking_inputs = []
+    for case in ranking_cases:
+        missing_signals = ["critic_consensus"]
+        if case.vote_average is None:
+            missing_signals.append("audience_reception")
+        if case.popularity is None:
+            missing_signals.append("popularity")
+        ranking_inputs.append(
+            build_ranking_input(
+                normalized_query=case.normalized_query,
+                canonical_title=case.canonical_title,
+                release_year=case.release_year,
+                requested_year=case.requested_year,
+                vote_average=case.vote_average,
+                vote_count=case.vote_count,
+                popularity=case.popularity,
+                missing_signals=missing_signals,
+                seed_relevance=1.0,
+                case_id=case.case_id,
+            )
+        )
+
+    by_case = {case.case_id: case for case in ranking_cases}
+    comparisons = compare_rankings(ranking_inputs, settings=get_settings())
+    return [
+        {
+            "case_id": comparison.identifier,
+            "display_label": by_case[comparison.identifier].display_label,
+            "requested_ranking_version": comparison.requested_ranking_version,
+            "applied_ranking_version": comparison.applied_ranking_version,
+            "shadow_requested_ranking_version": comparison.shadow_requested_ranking_version,
+            "shadow_applied_ranking_version": comparison.shadow_applied_ranking_version,
+            "primary_total": comparison.primary_total,
+            "shadow_total": comparison.shadow_total,
+            "score_delta": comparison.score_delta,
+            "primary_rank": comparison.primary_rank,
+            "shadow_rank": comparison.shadow_rank,
+            "ordering_delta": comparison.ordering_delta,
+            "missing_signals": comparison.missing_signals,
+            "warnings": comparison.warnings,
+        }
+        for comparison in comparisons
+    ]
 
 
 def capture_local_ranking_cases(session: Session, titles: list[str]) -> CapturedAuditExport:

@@ -98,10 +98,13 @@ def test_rank_seed_recommendation_candidates_derives_seed_relevance_from_provide
     by_id = {item["tmdb_source_movie_id"]: item for item in ranked}
     assert by_id["101"]["provider_position"] == 0
     assert by_id["101"]["score_components"]["query_match"] == 30.0
+    assert by_id["101"]["score"] == 33.0
     assert by_id["102"]["provider_position"] == 1
     assert by_id["102"]["score_components"]["query_match"] == 28.5
+    assert by_id["102"]["score"] == 31.5
     assert by_id["103"]["provider_position"] == 2
     assert by_id["103"]["score_components"]["query_match"] == 27.0
+    assert by_id["103"]["score"] == 30.0
 
 
 def test_rank_seed_recommendation_candidates_uses_existing_scorer_components():
@@ -110,9 +113,11 @@ def test_rank_seed_recommendation_candidates_uses_existing_scorer_components():
     result = ranked[0]
 
     assert result["score_version"] == "cine-score-v1"
+    assert result["score"] == 82.0
     assert result["score_components"]["audience_reception"] == 20.0
     assert result["score_components"]["popularity"] == 5.0
-    assert result["score_components"]["evidence_confidence"] is not None
+    assert result["score_components"]["evidence_confidence"] == 15.0
+    assert result["score_components"]["data_coverage"] == 12.0
 
 
 def test_rank_seed_recommendation_candidates_higher_total_ranks_first():

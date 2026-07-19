@@ -1,4 +1,8 @@
-from app.core.regional_ranking_audit import order_results_within_groups, run_regional_ranking_audit
+from app.core.regional_ranking_audit import (
+    compare_regional_ranking_versions,
+    order_results_within_groups,
+    run_regional_ranking_audit,
+)
 
 
 def main() -> None:
@@ -23,6 +27,24 @@ def main() -> None:
                     ]
                 )
             )
+
+    print("\n[comparison]")
+    print("case_id | requested | applied | shadow_requested | shadow_applied | delta | ordering_delta | warnings")
+    for comparison in compare_regional_ranking_versions():
+        print(
+            " | ".join(
+                [
+                    str(comparison["case_id"]),
+                    str(comparison["requested_ranking_version"]),
+                    str(comparison["applied_ranking_version"]),
+                    str(comparison["shadow_requested_ranking_version"]),
+                    str(comparison["shadow_applied_ranking_version"]),
+                    str(comparison["score_delta"]),
+                    str(comparison["ordering_delta"]),
+                    ",".join(comparison["warnings"]),
+                ]
+            )
+        )
 
 
 if __name__ == "__main__":

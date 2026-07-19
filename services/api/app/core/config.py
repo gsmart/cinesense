@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     cinesense_llm_api_key: str | None = Field(default=None, alias="CINESENSE_LLM_API_KEY")
     cinesense_llm_model: str | None = Field(default=None, alias="CINESENSE_LLM_MODEL")
     cinesense_llm_timeout_seconds: float = Field(default=10.0, alias="CINESENSE_LLM_TIMEOUT_SECONDS", gt=0, le=30)
+    active_ranking_version: str = Field(default="cine-score-v1", alias="CINESENSE_ACTIVE_RANKING_VERSION")
+    shadow_ranking_version: str = Field(default="disabled", alias="CINESENSE_SHADOW_RANKING_VERSION")
+    fallback_ranking_version: str = Field(default="cine-score-v1", alias="CINESENSE_FALLBACK_RANKING_VERSION")
     api_timeout_seconds: float = 10.0
     metadata_fresh_days: int = 30
     metadata_stale_days: int = 90

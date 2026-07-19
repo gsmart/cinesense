@@ -62,8 +62,16 @@ def test_cine_score_v1_penalizes_missing_signals_but_stays_deterministic() -> No
         missing_signals=["critic_consensus"],
     )
     assert score["version"] == "cine-score-v1"
+    assert score["total"] == 91.75
+    assert score["components"] == {
+        "query_match": 30.0,
+        "audience_reception": 21.25,
+        "critic_consensus": None,
+        "popularity": 8.5,
+        "evidence_confidence": 20.0,
+        "data_coverage": 12.0,
+    }
     assert score["components"]["critic_consensus"] is None
-    assert score["total"] > 0
 
 
 class _DummySession:

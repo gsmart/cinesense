@@ -1,4 +1,5 @@
 from app.core.regional_ranking_audit import (
+    compare_regional_ranking_versions,
     build_synthetic_regional_ranking_fixtures,
     order_results_within_groups,
     run_ranking_audit_case,
@@ -36,6 +37,8 @@ def test_lower_evidence_changes_only_evidence_confidence_for_equal_inputs():
     assert low.components["audience_reception"] == high.components["audience_reception"]
     assert low.components["popularity"] == high.components["popularity"]
     assert low.components["data_coverage"] == high.components["data_coverage"]
+    assert low.total == 72.54
+    assert high.total == 84.0
     assert low.components["evidence_confidence"] < high.components["evidence_confidence"]
 
 
@@ -46,6 +49,8 @@ def test_lower_popularity_changes_only_popularity_component_for_equal_inputs():
     assert low.components["audience_reception"] == high.components["audience_reception"]
     assert low.components["evidence_confidence"] == high.components["evidence_confidence"]
     assert low.components["data_coverage"] == high.components["data_coverage"]
+    assert low.total == 79.69
+    assert high.total == 87.39
     assert low.components["popularity"] < high.components["popularity"]
 
 
@@ -77,6 +82,7 @@ def test_sparse_low_quality_candidate_is_not_treated_as_acclaimed():
 
     assert sparse.total < regional.total
     assert sparse.total < mainstream.total
+    assert sparse.total == 57.56
     assert sparse.components["audience_reception"] < regional.components["audience_reception"]
 
 
@@ -124,3 +130,26 @@ def test_component_audit_uses_explicit_maximums_only():
     assert result.component_audit["popularity"].maximum == 10.0
     assert result.component_audit["evidence_confidence"].maximum == 20.0
     assert result.component_audit["critic_consensus"].maximum is None
+
+
+def test_regional_audit_freezes_representative_case_totals():
+    by_case = {result.case.case_id: result for result in run_regional_ranking_audit()}
+
+    assert by_case["C-mainstream-style"].total == 90.0
+    assert by_case["C-regional-style"].total == 76.65
+    assert by_case["D-currently-trending"].total == 90.02
+    assert by_case["D-older-acclaimed"].total == 83.57
+    assert by_case["G-identical-one"].total == 78.65
+    assert by_case["G-identical-two"].total == 78.65
+
+
+def test_shadow_comparison_is_controlled_when_shadow_version_is_disabled():
+    first = compare_regional_ranking_versions()[0]
+
+    assert first["requested_ranking_version"] == "cine-score-v1"
+    assert first["applied_ranking_version"] == "cine-score-v1"
+    assert first["shadow_requested_ranking_version"] is None
+    assert first["shadow_applied_ranking_version"] is None
+    assert first["score_delta"] is None
+    assert first["ordering_delta"] is None
+    assert first["warnings"] == ["shadow_ranking_disabled"]

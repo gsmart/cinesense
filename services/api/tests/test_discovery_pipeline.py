@@ -198,7 +198,9 @@ def test_rank_discovery_candidates_keeps_missing_signals_explicit_and_uses_match
     result = ranked[0]
 
     assert result["score_version"] == "cine-score-v1"
+    assert result["score"] == 33.0
     assert result["score_components"]["query_match"] == 30.0
+    assert result["score_components"]["data_coverage"] == 3.0
     assert "critic_consensus" in result["missing_signals"]
     assert "audience_reception" in result["missing_signals"]
     assert "popularity" in result["missing_signals"]

@@ -2,7 +2,7 @@
 
 Transparent, region-aware movie discovery with deterministic backend ranking and explicit data provenance.
 
-Current status: exact lookup, seed recommendations, the public discovery API, and the manual `/discover` UI are implemented as of July 19, 2026. Direct browser verification of `/discover` still requires local user confirmation when the agent environment cannot launch Chrome.
+Current status: exact lookup, seed recommendations, the public discovery API, the manual `/discover` UI, and the internal `cine-score-v2` foundation are implemented as of July 19, 2026. Direct browser verification of `/discover` still requires local user confirmation when the agent environment cannot launch Chrome.
 
 Implemented now:
 - monorepo layout with `apps/web` and `services/api`
@@ -12,6 +12,7 @@ Implemented now:
 - PostgreSQL schema and Alembic migration for movies, aliases, external IDs, and observations
 - TMDB-backed provider adapter behind a backend-only token boundary
 - deterministic provisional `cine-score-v1`
+- internal versioned ranking dispatcher, fallback semantics, and offline shadow-comparison scaffolding for future scorers
 - Next.js UI for lookup, disambiguation, score breakdown, missing signals, provenance, freshness, on-demand seed recommendations, and manual structured discovery at `/discover`
 
 Verified now:
@@ -19,6 +20,7 @@ Verified now:
 - seed recommendations work through API and UI
 - recommendations are capped at 20
 - ranking is deterministic with `cine-score-v1`
+- `cine-score-v1` is frozen behind a shared ranking input and dispatcher path
 - discovery API tests pass
 - `/discover` builds and serves locally
 
@@ -40,8 +42,10 @@ Documentation map:
 - `code_review.md`: review checklist
 - `docs/plans/phase_1a_exact_lookup.md`: Phase 1A execution plan
 - `docs/plans/phase_1b_seed_recommendations.md`: Phase 1B execution plan
+- `docs/plans/phase_2r_cine_score_v2_foundation.md`: Phase 2R approved execution plan
 - `docs/phase_1a_achievement.md`: Phase 1A closeout
 - `docs/phase_1b_achievement.md`: Phase 1 closeout and Phase 2 planning seed
+- `docs/phase_2r_ranking_foundation.md`: Phase 2R implementation record
 - `docs/chatgpt_codex_project_workflow.md`: how to move context between ChatGPT Projects and Codex
 - `docs/decisions/0001_provider_first_ingestion.md`
 - `docs/decisions/0002_field_level_freshness.md`

@@ -16,15 +16,15 @@ from app.adapters.tmdb import (
     UnsupportedTmdbDiscoverFilterError,
     summarize_tmdb_http_error,
 )
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.freshness import FreshnessState, FreshnessWindow, evaluate_freshness
+from app.core.ranking import build_ranking_input, compute_ranking
 from app.interpreters import (
     InterpreterFailureError,
     InterpreterUnavailableError,
     NaturalLanguageDiscoveryInterpreter,
 )
 from app.core.normalization import normalize_region, normalize_title
-from app.core.scoring import compute_cine_score_v1
 from app.models.movie import ExternalId, Movie, MovieAlias, Observation
 from app.schemas.discovery import DiscoveryRequest
 from app.schemas.natural_language import NaturalLanguageDiscoveryRequest
@@ -34,9 +34,10 @@ logger = logging.getLogger(__name__)
 
 
 class LookupService:
-    def __init__(self, db: Session, tmdb: TmdbAdapter) -> None:
+    def __init__(self, db: Session, tmdb: TmdbAdapter, settings_override: Settings | None = None) -> None:
         self.db = db
         self.tmdb = tmdb
+        self.settings = settings_override or settings
 
     async def lookup(self, *, title: str, year: int | None, region: str | None, media_type: str) -> dict:
         normalized_title = normalize_title(title)
@@ -336,7 +337,7 @@ class LookupService:
             if popularity is None:
                 missing_signals.append("popularity")
 
-            score = compute_cine_score_v1(
+            ranking_input = build_ranking_input(
                 normalized_query="",
                 canonical_title=movie.normalized_title,
                 release_year=movie.release_year,
@@ -345,7 +346,15 @@ class LookupService:
                 vote_count=audience.evidence_count if audience else None,
                 popularity=float(popularity.numeric_value) if popularity and popularity.numeric_value is not None else None,
                 missing_signals=missing_signals,
+                freshness=freshness_summary,
                 seed_relevance=match_value_for_position(position),
+                tmdb_source_movie_id=external.source_movie_id,
+                provider_position=position,
+            )
+            computation = compute_ranking(
+                ranking_input,
+                requested_version=self.settings.active_ranking_version,
+                settings=self.settings,
             )
             ranked.append(
                 {
@@ -360,10 +369,10 @@ class LookupService:
                     },
                     "tmdb_source_movie_id": external.source_movie_id,
                     "provider_position": position,
-                    "score": score["total"],
-                    "score_version": score["version"],
-                    "score_components": score["components"],
-                    "missing_signals": score["missing_signals"],
+                    "score": computation.total,
+                    "score_version": computation.applied_ranking_version,
+                    "score_components": computation.components,
+                    "missing_signals": computation.missing_signals,
                     "provenance": {
                         "source": external.source,
                         "source_movie_id": external.source_movie_id,
@@ -762,7 +771,7 @@ class LookupService:
         audience = signal_map.get("audience_reception")
         popularity = signal_map.get("popularity")
         external = next((item for item in movie.external_ids if item.source == "tmdb"), None)
-        score = compute_cine_score_v1(
+        ranking_input = build_ranking_input(
             normalized_query=normalized_title,
             canonical_title=movie.normalized_title,
             release_year=movie.release_year,
@@ -771,6 +780,13 @@ class LookupService:
             vote_count=audience.evidence_count if audience else None,
             popularity=float(popularity.numeric_value) if popularity and popularity.numeric_value is not None else None,
             missing_signals=missing_signals,
+            freshness=freshness_summary,
+            tmdb_source_movie_id=external.source_movie_id if external else None,
+        )
+        computation = compute_ranking(
+            ranking_input,
+            requested_version=self.settings.active_ranking_version,
+            settings=self.settings,
         )
         return {
             "status": "resolved",
@@ -794,7 +810,7 @@ class LookupService:
                 "freshness": freshness_summary,
                 "observations": observations,
                 "missing_signals": missing_signals,
-                "score": score,
+                "score": computation.public_score(),
             },
             "disambiguation_choices": [],
         }

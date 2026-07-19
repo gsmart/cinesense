@@ -115,6 +115,8 @@ def test_lookup_uses_fresh_local_data_without_tmdb_call():
 
     result = asyncio.run(service.lookup(title="the dark knight", year=2008, region=None, media_type="movie"))
     assert result["source"] == "local_cache"
+    assert result["movie"]["score"]["version"] == "cine-score-v1"
+    assert result["movie"]["score"]["total"] == 80.25
     assert tmdb.search_calls == 0
 
 
