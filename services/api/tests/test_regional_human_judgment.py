@@ -693,3 +693,92 @@ def test_complete_manual_smoke_verification_demonstration(tmp_path):
     res_a = import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_8a")
     res_b = import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_8b")
     assert res_a["output_hashes"]["reviewed_judgments.jsonl"] == res_b["output_hashes"]["reviewed_judgments.jsonl"]
+
+
+def test_improved_benchmarks_generator_policies(tmp_path):
+    from app.regional_human_judgment import _build_case_rows, JudgmentCaseBuilderConfig
+
+    mock_cases = [
+        {"tmdb_movie_id": "1", "title": "Movie 1", "language": "ml", "entity_status": "VALIDATED_EXACT_MATCH", "release_year": 2020, "v1_score": 7.0, "v2_rank": 1, "v1_rank": 2, "v2_score": 8.0, "rank_delta": 1, "warnings": [], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+        {"tmdb_movie_id": "2", "title": "Movie 2", "language": "ml", "entity_status": "VALIDATED_EXACT_MATCH", "release_year": 2021, "v1_score": 7.5, "v2_rank": 2, "v1_rank": 3, "v2_score": 8.5, "rank_delta": 1, "warnings": [], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+        {"tmdb_movie_id": "3", "title": "Movie 3", "language": "ml", "entity_status": "VALIDATED_EXACT_MATCH", "release_year": 2022, "v1_score": 8.0, "v2_rank": 3, "v1_rank": 4, "v2_score": 9.0, "rank_delta": 1, "warnings": [], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+        {"tmdb_movie_id": "4", "title": "Movie 4", "language": "ml", "entity_status": "VALIDATED_EXACT_MATCH", "release_year": 2023, "v1_score": 8.5, "v2_rank": 4, "v1_rank": 5, "v2_score": 9.5, "rank_delta": 1, "warnings": [], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+
+        # Future-release exclusions (should be excluded as release_year > 2026)
+        {"tmdb_movie_id": "5", "title": "Future Movie", "language": "ml", "entity_status": "VALIDATED_EXACT_MATCH", "release_year": 2027, "v1_score": 8.0, "v2_rank": 5, "v1_rank": 6, "v2_score": 9.0, "rank_delta": 1, "warnings": [], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+
+        # Ambiguous identity status (should be excluded)
+        {"tmdb_movie_id": "6", "title": "Ambiguous Movie", "language": "ml", "entity_status": "AMBIGUOUS_REVIEW_REQUIRED", "release_year": 2022, "v1_score": 8.0, "v2_rank": 6, "v1_rank": 7, "v2_score": 9.0, "rank_delta": 1, "warnings": [], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+
+        # Critical warning exclusion (should be excluded)
+        {"tmdb_movie_id": "7", "title": "Critical Warning Movie", "language": "ml", "entity_status": "EXACT_MATCH_WITH_WARNINGS", "release_year": 2022, "v1_score": 8.0, "v2_rank": 7, "v1_rank": 8, "v2_score": 9.0, "rank_delta": 1, "warnings": ["YEAR_CONFLICT"], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+
+        # TE cases (another language to check balanced sample)
+        {"tmdb_movie_id": "11", "title": "Movie 11", "language": "te", "entity_status": "VALIDATED_EXACT_MATCH", "release_year": 2020, "v1_score": 7.0, "v2_rank": 1, "v1_rank": 2, "v2_score": 8.0, "rank_delta": 1, "warnings": [], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+        {"tmdb_movie_id": "12", "title": "Movie 12", "language": "te", "entity_status": "VALIDATED_EXACT_MATCH", "release_year": 2021, "v1_score": 7.5, "v2_rank": 2, "v1_rank": 3, "v2_score": 8.5, "rank_delta": 1, "warnings": [], "quality_group": "high", "reach_group": "low", "selected_cohort_level": "level_1"},
+    ]
+
+    mock_context = {
+        "cases": mock_cases,
+        "source_paths": {
+            "run_dir": str(tmp_path / "run_dir")
+        }
+    }
+
+    run_dir = tmp_path / "run_dir"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    movies_jsonl = run_dir / "movies.jsonl"
+
+    movie_records = [
+        {"source_record_id": "1", "release_date": "2020-01-01"},
+        {"source_record_id": "2", "release_date": "2021-01-01"},
+        {"source_record_id": "3", "release_date": "2022-01-01"},
+        {"source_record_id": "4", "release_date": "2026-01-01"},  # Retained recent release
+        {"source_record_id": "5", "release_date": "2027-01-01"},
+        {"source_record_id": "11", "release_date": "2020-01-01"},
+        {"source_record_id": "12", "release_date": "2020-01-01"},
+    ]
+    with movies_jsonl.open("w", encoding="utf-8") as f:
+        for rec in movie_records:
+            f.write(json.dumps(rec) + "\n")
+
+    config = JudgmentCaseBuilderConfig(
+        cases_per_language=5,
+        max_total_cases=10,
+    )
+
+    blinded_rows, mapping_rows = _build_case_rows(context=mock_context, config=config)
+
+    selected_ids = set()
+    for row in blinded_rows:
+        selected_ids.add(row["movie_a_tmdb_id"])
+        selected_ids.add(row["movie_b_tmdb_id"])
+
+    assert "5" not in selected_ids
+    assert "6" not in selected_ids
+    assert "7" not in selected_ids
+    assert "4" in selected_ids
+
+    pairs = []
+    for row in blinded_rows:
+        p = tuple(sorted((row["movie_a_tmdb_id"], row["movie_b_tmdb_id"])))
+        pairs.append(p)
+    assert len(pairs) == len(set(pairs))
+
+    for row in blinded_rows:
+        assert "v1_rank" not in row
+        assert "v2_rank" not in row
+        assert "v1_score" not in row
+        assert "v2_score" not in row
+        assert "rank_delta" not in row
+
+    for m_row in mapping_rows:
+        assert isinstance(m_row["selection_reasons"], list)
+        assert len(m_row["selection_reasons"]) > 0
+
+    blinded_rows2, mapping_rows2 = _build_case_rows(context=mock_context, config=config)
+    assert blinded_rows == blinded_rows2
+    assert mapping_rows == mapping_rows2
+
+    te_cases = [r for r in blinded_rows if r["language"] == "te"]
+    assert len(te_cases) == 1

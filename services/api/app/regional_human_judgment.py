@@ -33,8 +33,9 @@ DEFAULT_CASE_TYPES = (
     "CONFIDENCE_BOUNDARY_REVIEW",
     "CROSS_LANGUAGE_BALANCED_DIAGNOSTIC_SAMPLE",
 )
-DEFAULT_CASES_PER_LANGUAGE = 6
-DEFAULT_MAX_TOTAL_CASES = 24
+DEFAULT_CASES_PER_LANGUAGE = 12
+DEFAULT_MAX_TOTAL_CASES = 36
+
 
 REVIEWER_PREFERENCE_VALUES = ("A_HIGHER", "B_HIGHER", "ROUGHLY_EQUAL", "CANNOT_JUDGE")
 REVIEWER_CONFIDENCE_VALUES = ("HIGH", "MEDIUM", "LOW")
@@ -449,77 +450,281 @@ def _build_case_rows(*, context: dict[str, Any], config: JudgmentCaseBuilderConf
     by_language: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for case in cases:
         by_language[case["language"]].append(case)
+
+    # Load movies.jsonl to map TMDB IDs to detailed evidence if available (for release_date and genre_ids)
+    movies_by_id = {}
+    if "source_paths" in context and "run_dir" in context["source_paths"]:
+        evidence_dir = Path(context["source_paths"]["run_dir"])
+        movies_path = evidence_dir / "movies.jsonl"
+        if movies_path.exists():
+            try:
+                for line in movies_path.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        m = json.loads(line)
+                        movies_by_id[str(m["source_record_id"])] = m
+            except Exception:
+                pass
+
     blinded_rows: list[dict[str, str]] = []
     mapping_rows: list[dict[str, Any]] = []
-    used_pairs: set[tuple[str, str, str]] = set()
+
+    # We will accumulate and report retained recent releases (released in last 12 months)
+    retained_recent_releases = []
+
     global_index = 1
+    # Track unique pairs globally (or per language) using unordered tuples of TMDB movie IDs
+    used_pairs: set[tuple[str, str]] = set()
+
     for language in sorted(by_language):
+        # 1. Filter rows by Identity, Release-date, and Warnings policies
+        language_rows = _filter_eligible_rows(by_language[language], movies_by_id, retained_recent_releases)
+
+        # 2. Resolve primary genres on all eligible rows using movies_by_id to avoid unknown_genre
+        for row in language_rows:
+            row["primary_genre"] = _get_movie_primary_genre(row["tmdb_movie_id"], row, movies_by_id)
+
+        # 3. Sort language_rows deterministically
         language_rows = sorted(
-            by_language[language],
+            language_rows,
             key=lambda row: (
                 row["v2_rank"] if row["v2_rank"] is not None else 10**9,
                 row["tmdb_movie_id"],
             ),
         )
-        generated_for_language = 0
-        for case_type in config.case_types:
-            if generated_for_language >= config.cases_per_language or len(blinded_rows) >= config.max_total_cases:
-                break
-            pair = _select_pair_for_case_type(language_rows, case_type=case_type)
-            if pair is None:
-                continue
-            left, right = pair
-            pair_key = (case_type, left["tmdb_movie_id"], right["tmdb_movie_id"])
-            if pair_key in used_pairs:
-                continue
-            used_pairs.add(pair_key)
+
+        # 4. Round-robin selection of config.cases_per_language unique pairs
+        language_pairs: list[tuple[dict[str, Any], dict[str, Any], str]] = []
+
+        added_any = True
+        while len(language_pairs) < config.cases_per_language and added_any:
+            added_any = False
+            for case_type in config.case_types:
+                if len(language_pairs) >= config.cases_per_language or len(blinded_rows) + len(language_pairs) >= config.max_total_cases:
+                    break
+                pair = _select_pair_for_case_type(language_rows, case_type=case_type, used_pairs=used_pairs)
+                if pair is not None:
+                    left, right = pair
+                    p_key = (left["tmdb_movie_id"], right["tmdb_movie_id"])
+                    used_pairs.add(p_key)
+                    language_pairs.append((left, right, case_type))
+                    added_any = True
+
+        # Print diagnostics to stdout for reporting
+        print(f"[builder_diagnostics] language={language} eligible_movies={len(language_rows)} selected_pairs={len(language_pairs)}")
+
+        # 5. Build final rows for this language
+        for left, right, primary_case_type in language_pairs:
             case_id = f"{language}-{global_index:03d}"
             global_index += 1
-            blinded_row, mapping_row = _build_blinded_pair_row(case_id=case_id, case_type=case_type, left=left, right=right)
+
+            # Find all selection reasons for mapping row
+            all_reasons = _get_all_matching_case_types(left, right, language_rows, config.case_types)
+
+            blinded_row, mapping_row = _build_blinded_pair_row(
+                case_id=case_id,
+                case_type=primary_case_type,
+                left=left,
+                right=right,
+                selection_reasons=all_reasons,
+                movies_by_id=movies_by_id
+            )
             blinded_rows.append(blinded_row)
             mapping_rows.append(mapping_row)
-            generated_for_language += 1
+
         if len(blinded_rows) >= config.max_total_cases:
             break
+
+    # Print list of retained recent releases for report documentation
+    if retained_recent_releases:
+        print(f"[builder_diagnostics] retained_recent_releases={json.dumps(retained_recent_releases)}")
+
     return blinded_rows, mapping_rows
 
 
-def _select_pair_for_case_type(rows: list[dict[str, Any]], *, case_type: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    if len(rows) < 2:
+def _filter_eligible_rows(rows: list[dict[str, Any]], movies_by_id: dict[str, Any], retained_recent_releases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    eligible = []
+    CRITICAL_WARNINGS = {
+        "DUPLICATE_QID", "TMDB_ID_CONFLICT", "YEAR_CONFLICT",
+        "LANGUAGE_CONFLICT", "TITLE_CONFLICT", "MISSING_WIKIDATA_QID"
+    }
+    for row in rows:
+        # Identity Policy
+        entity_status = row.get("entity_status")
+        if entity_status not in ("VALIDATED_EXACT_MATCH", "EXACT_MATCH_WITH_WARNINGS"):
+            continue
+
+        # Exclude critical warnings
+        row_warnings = row.get("warnings") or []
+        if any(w in CRITICAL_WARNINGS for w in row_warnings):
+            continue
+
+        # Release-date Policy
+        release_year = row.get("release_year")
+        if release_year is not None:
+            try:
+                ry = int(release_year)
+                if ry > 2026:  # Exclude future/unreleased movies
+                    continue
+            except ValueError:
+                pass
+
+        # Exclude last 12 months unless evidence is strong and complete
+        m_id = str(row.get("tmdb_movie_id"))
+        m_rec = movies_by_id.get(m_id)
+        if m_rec:
+            rdate = m_rec.get("release_date")
+            if rdate and len(rdate) >= 10:
+                # Last 12 months: after 2025-07-20
+                if rdate > "2025-07-20":
+                    # Check if strong and complete (VALIDATED_EXACT_MATCH and no warnings)
+                    if entity_status == "VALIDATED_EXACT_MATCH" and not row_warnings:
+                        retained_recent_releases.append({
+                            "tmdb_movie_id": m_id,
+                            "title": row.get("title"),
+                            "release_date": rdate
+                        })
+                    else:
+                        continue
+
+        eligible.append(row)
+    return eligible
+
+
+def _get_movie_primary_genre(movie_id: str, row: dict[str, Any], movies_by_id: dict[str, Any]) -> str:
+    m_rec = movies_by_id.get(str(movie_id))
+    if m_rec:
+        genre_ids = m_rec.get("genre_ids")
+        if genre_ids and isinstance(genre_ids, list):
+            TMDB_GENRE_MAP = {
+                28: "Action",
+                12: "Adventure",
+                16: "Animation",
+                35: "Comedy",
+                80: "Crime",
+                99: "Documentary",
+                18: "Drama",
+                10751: "Family",
+                14: "Fantasy",
+                36: "History",
+                27: "Horror",
+                10402: "Music",
+                9648: "Mystery",
+                10749: "Romance",
+                878: "Science Fiction",
+                53: "Thriller",
+                10770: "TV Movie",
+                10752: "War",
+                37: "Western"
+            }
+            mapped = [TMDB_GENRE_MAP[gid] for gid in genre_ids if gid in TMDB_GENRE_MAP]
+            if mapped:
+                return mapped[0]
+    orig_genre = row.get("primary_genre") or ""
+    return "" if orig_genre == "unknown_genre" else orig_genre
+
+
+def _select_pair_for_case_type(rows: list[dict[str, Any]], *, case_type: str, used_pairs: set[tuple[str, str]]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    candidate_pairs = []
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            p = _ordered_pair(rows[i], rows[j])
+            p_key = (p[0]["tmdb_movie_id"], p[1]["tmdb_movie_id"])
+            if p_key not in used_pairs:
+                score = _pair_comparability_score(p[0], p[1], case_type)
+                # Specific check: avoid pairing unrelated movies for TOP K SELECTION
+                if case_type == "TOP_K_SELECTION_WITHIN_GROUP":
+                    if p[0].get("v2_rank") is None or p[0]["v2_rank"] > 15 or p[1].get("v2_rank") is None or p[1]["v2_rank"] > 15:
+                        continue
+                candidate_pairs.append((score, p))
+    if not candidate_pairs:
         return None
-    if case_type == "PAIRWISE_RANKING_COMPARISON":
-        selected = sorted(rows, key=lambda row: (-abs(row["rank_delta"] or 0), row["tmdb_movie_id"]))[:2]
-        return _ordered_pair(selected[0], selected[1]) if len(selected) == 2 else None
-    if case_type == "TOP_K_SELECTION_WITHIN_GROUP":
-        top = [row for row in rows if row["v2_rank"] is not None and row["v2_rank"] <= 6]
-        return _ordered_pair(top[-2], top[-1]) if len(top) >= 2 else _adjacent_pair(rows)
-    if case_type == "UNEXPECTED_MOVEMENT_REVIEW":
-        selected = [row for row in rows if "high_rating_down_unexpected" in json.dumps(row).lower() or "low_rating_up_unexpected" in json.dumps(row).lower()]
-        if len(selected) >= 2:
-            return _ordered_pair(selected[0], selected[1])
-        selected = sorted(rows, key=lambda row: (row["quality_group"] != "high", -(abs(row["rank_delta"] or 0)), row["tmdb_movie_id"]))
-        return _ordered_pair(selected[0], selected[1])
-    if case_type == "HIGH_QUALITY_LOW_REACH_REVIEW":
-        selected = [row for row in rows if row["quality_group"] == "high" and row["reach_group"] == "low"]
-        if len(selected) >= 2:
-            return _ordered_pair(selected[0], selected[1])
-        return _contrast_pair(rows, left_filter=lambda row: row["quality_group"] == "high", right_filter=lambda row: row["reach_group"] == "high")
-    if case_type == "HIGH_REACH_LOWER_QUALITY_REVIEW":
-        return _contrast_pair(rows, left_filter=lambda row: row["reach_group"] == "high", right_filter=lambda row: row["quality_group"] == "high")
-    if case_type == "LARGE_V1_V2_DISAGREEMENT_REVIEW":
-        ordered = sorted(rows, key=lambda row: (-abs(row["rank_delta"] or 0), row["tmdb_movie_id"]))
-        return _ordered_pair(ordered[0], ordered[1])
-    if case_type == "FALLBACK_LEVEL_REVIEW":
-        return _contrast_pair(rows, left_filter=lambda row: row["selected_cohort_level"] != "level_1", right_filter=lambda row: row["selected_cohort_level"] == "level_1")
-    if case_type == "CONFIDENCE_BOUNDARY_REVIEW":
-        ordered = sorted(rows, key=lambda row: (row["confidence"] is None, row["confidence"] if row["confidence"] is not None else 10**9, row["tmdb_movie_id"]))
-        return _ordered_pair(ordered[0], ordered[-1]) if len(ordered) >= 2 else None
-    if case_type == "CROSS_LANGUAGE_BALANCED_DIAGNOSTIC_SAMPLE":
-        midpoint = len(rows) // 2
-        if midpoint <= 0:
-            return _adjacent_pair(rows)
-        return _ordered_pair(rows[midpoint - 1], rows[midpoint])
-    return None
+    candidate_pairs.sort(key=lambda item: (-item[0], item[1][0]["tmdb_movie_id"], item[1][1]["tmdb_movie_id"]))
+    return candidate_pairs[0][1]
+
+
+def _pair_comparability_score(left: dict[str, Any], right: dict[str, Any], case_type: str) -> float:
+    score = 0.0
+
+    # Era comparability
+    if left.get("era") == right.get("era") and left.get("era") is not None:
+        score += 100.0
+
+    # Genre compatibility
+    g_left = left.get("primary_genre") or ""
+    g_right = right.get("primary_genre") or ""
+    if g_left and g_left == g_right:
+        score += 50.0
+
+    # Case-type specific scores
+    if case_type == "PAIRWISE_RANKING_COMPARISON" or case_type == "LARGE_V1_V2_DISAGREEMENT_REVIEW":
+        score += abs(left.get("rank_delta") or 0) + abs(right.get("rank_delta") or 0)
+    elif case_type == "TOP_K_SELECTION_WITHIN_GROUP":
+        r_left = left.get("v2_rank")
+        r_right = right.get("v2_rank")
+        if r_left is not None and r_left <= 6 and r_right is not None and r_right <= 6:
+            score += 1000.0 - (r_left + r_right)
+    elif case_type == "UNEXPECTED_MOVEMENT_REVIEW":
+        l_unexp = "high_rating_down_unexpected" in json.dumps(left).lower() or "low_rating_up_unexpected" in json.dumps(left).lower()
+        r_unexp = "high_rating_down_unexpected" in json.dumps(right).lower() or "low_rating_up_unexpected" in json.dumps(right).lower()
+        if l_unexp:
+            score += 500.0
+        if r_unexp:
+            score += 500.0
+    elif case_type == "HIGH_QUALITY_LOW_REACH_REVIEW":
+        l_fit = left.get("quality_group") == "high" and left.get("reach_group") == "low"
+        r_fit = right.get("quality_group") == "high" and right.get("reach_group") == "low"
+        if l_fit and r_fit:
+            score += 1000.0
+        elif l_fit and right.get("reach_group") == "high" and right.get("quality_group") == "high":
+            score += 500.0
+        elif r_fit and left.get("reach_group") == "high" and left.get("quality_group") == "high":
+            score += 500.0
+    elif case_type == "HIGH_REACH_LOWER_QUALITY_REVIEW":
+        l_fit = left.get("reach_group") == "high" and left.get("quality_group") == "high"
+        r_fit = right.get("reach_group") == "high" and right.get("quality_group") == "high"
+        if l_fit and r_fit:
+            score += 1000.0
+    elif case_type == "FALLBACK_LEVEL_REVIEW":
+        l_level = left.get("selected_cohort_level")
+        r_level = right.get("selected_cohort_level")
+        if (l_level != "level_1" and r_level == "level_1") or (r_level != "level_1" and l_level == "level_1"):
+            score += 1000.0
+    elif case_type == "CONFIDENCE_BOUNDARY_REVIEW":
+        l_conf = left.get("confidence_band")
+        r_conf = right.get("confidence_band")
+        if (l_conf == "medium" and r_conf == "high") or (r_conf == "medium" and l_conf == "high"):
+            score += 1000.0
+    elif case_type == "CROSS_LANGUAGE_BALANCED_DIAGNOSTIC_SAMPLE":
+        r_left = left.get("v2_rank") or 0
+        r_right = right.get("v2_rank") or 0
+        score += 100.0 - abs(r_left - r_right)
+
+    return score
+
+
+def _get_all_matching_case_types(left: dict[str, Any], right: dict[str, Any], rows: list[dict[str, Any]], case_types: list[str]) -> list[str]:
+    reasons = []
+    if left.get("v2_rank") is not None and left["v2_rank"] <= 6 and right.get("v2_rank") is not None and right["v2_rank"] <= 6:
+        reasons.append("TOP_K_SELECTION_WITHIN_GROUP")
+    if ("high_rating_down_unexpected" in json.dumps(left).lower() or "low_rating_up_unexpected" in json.dumps(left).lower() or
+        "high_rating_down_unexpected" in json.dumps(right).lower() or "low_rating_up_unexpected" in json.dumps(right).lower()):
+        reasons.append("UNEXPECTED_MOVEMENT_REVIEW")
+    if (left.get("quality_group") == "high" and left.get("reach_group") == "low" and right.get("quality_group") == "high" and right.get("reach_group") == "low") or \
+       (left.get("quality_group") == "high" and right.get("reach_group") == "high") or \
+       (right.get("quality_group") == "high" and left.get("reach_group") == "high"):
+        reasons.append("HIGH_QUALITY_LOW_REACH_REVIEW")
+    if (left.get("reach_group") == "high" and right.get("quality_group") == "high") or \
+       (right.get("reach_group") == "high" and left.get("quality_group") == "high"):
+        reasons.append("HIGH_REACH_LOWER_QUALITY_REVIEW")
+    if abs(left.get("rank_delta") or 0) >= 5 or abs(right.get("rank_delta") or 0) >= 5:
+        reasons.append("LARGE_V1_V2_DISAGREEMENT_REVIEW")
+        reasons.append("PAIRWISE_RANKING_COMPARISON")
+    if (left.get("selected_cohort_level") != "level_1" and right.get("selected_cohort_level") == "level_1") or \
+       (right.get("selected_cohort_level") != "level_1" and left.get("selected_cohort_level") == "level_1"):
+        reasons.append("FALLBACK_LEVEL_REVIEW")
+    if left.get("confidence_band") == "medium" or right.get("confidence_band") == "medium":
+        reasons.append("CONFIDENCE_BOUNDARY_REVIEW")
+    return sorted(list(set(reasons)))
 
 
 def _ordered_pair(left: dict[str, Any], right: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -536,24 +741,19 @@ def _pair_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _adjacent_pair(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
-    return _ordered_pair(rows[0], rows[1])
-
-
-def _contrast_pair(
-    rows: list[dict[str, Any]],
+def _build_blinded_pair_row(
     *,
-    left_filter: Any,
-    right_filter: Any,
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    left = next((row for row in rows if left_filter(row)), None)
-    right = next((row for row in rows if row["tmdb_movie_id"] != (left or {}).get("tmdb_movie_id") and right_filter(row)), None)
-    if left is None or right is None:
-        return None
-    return _ordered_pair(left, right)
+    case_id: str,
+    case_type: str,
+    left: dict[str, Any],
+    right: dict[str, Any],
+    selection_reasons: list[str],
+    movies_by_id: dict[str, Any],
+) -> tuple[dict[str, str], dict[str, Any]]:
+    # Resolve genres and release dates from movies_by_id
+    genre_a = _get_movie_primary_genre(left["tmdb_movie_id"], left, movies_by_id)
+    genre_b = _get_movie_primary_genre(right["tmdb_movie_id"], right, movies_by_id)
 
-
-def _build_blinded_pair_row(*, case_id: str, case_type: str, left: dict[str, Any], right: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any]]:
     blinded = {
         "judgment_case_id": case_id,
         "case_type": case_type,
@@ -564,8 +764,8 @@ def _build_blinded_pair_row(*, case_id: str, case_type: str, left: dict[str, Any
         "movie_b_title": _safe_csv_cell(str(right["title"] or "")),
         "movie_a_release_year": _stringify(left["release_year"]),
         "movie_b_release_year": _stringify(right["release_year"]),
-        "movie_a_primary_genre": _safe_csv_cell(str(left.get("primary_genre") or "")),
-        "movie_b_primary_genre": _safe_csv_cell(str(right.get("primary_genre") or "")),
+        "movie_a_primary_genre": _safe_csv_cell(genre_a),
+        "movie_b_primary_genre": _safe_csv_cell(genre_b),
         "movie_a_tmdb_rating": _stringify(left.get("v1_score")),
         "movie_b_tmdb_rating": _stringify(right.get("v1_score")),
         "movie_a_vote_count": _stringify(left.get("vote_group")),
@@ -585,6 +785,7 @@ def _build_blinded_pair_row(*, case_id: str, case_type: str, left: dict[str, Any
     mapping = {
         "judgment_case_id": case_id,
         "case_type": case_type,
+        "selection_reasons": selection_reasons,
         "language": left["language"],
         "movie_a_tmdb_id": left["tmdb_movie_id"],
         "movie_b_tmdb_id": right["tmdb_movie_id"],

@@ -106,7 +106,10 @@ Shadow scoring:
 
 Human judgment workflow:
 - confirm `judgment_cases.csv` excludes v1/v2 ranks, scores, and rank deltas
-- confirm `judgment_case_mapping.jsonl` keeps the hidden scorer fields needed for offline evaluation
+- confirm `judgment_case_mapping.jsonl` keeps the hidden scorer fields needed for offline evaluation, and includes the `selection_reasons` list for each case
+- confirm unique pair policy ensures each unordered movie pair occurs at most once in `judgment_cases.csv`
+- confirm exclusions are correct: future releases, ambiguous status, and critical warning movies are excluded
+- confirm primary genre mapping parses actual TMDB genre names from `movies.jsonl` correctly and uses empty string for missing genres
 - confirm `reviewed_judgments.jsonl` and `reviewed_judgment_summary.json` are written only after immutable-column validation passes
 - confirm strict `decimal.Decimal` validation checks numbers: rejects scientific notation, commas, booleans, NaN/Infinity, internal whitespace/signs, and ensures year matches mathematically integral Decimal values.
 - confirm negative zero handling equated `-0` / `-0.00` to `0`
@@ -115,6 +118,7 @@ Human judgment workflow:
 - confirm unescaped formula cells in editable fields fail import
 - confirm notes starting with a bullet dash `-` are accepted if benign, and double escapes strip exactly one quote safety prefix
 - confirm `weight_evaluation_summary.json`, `weight_evaluation_cases.jsonl`, `language_weight_comparison.json`, `evaluation_recommendation.json`, and `evaluation_manifest.json` are deterministic for identical inputs
+
 
 ## Determinism And Negative Checks
 

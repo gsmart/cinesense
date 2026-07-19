@@ -35,6 +35,14 @@ Reviewer notes are normalized using a reversible escape convention:
   * Do not modify the headers or any other columns.
   * Duplicate headers or modified case IDs will cause the import command to fail.
 
+### 4. Improved Review Package Generation
+To improve case benchmark quality and ensure fair human comparisons:
+- **Unique Pair Policy**: Each unordered movie pair `(Movie A, Movie B)` is generated at most once. Multiple diagnostic matches are merged, and all matching selection reasons are stored in the mapping's `selection_reasons` array.
+- **Release-Date Policy**: Movies with a release year greater than the current year (2026) are excluded. Movies released in the last 12 months (since 2025-07-20) are excluded unless they are `VALIDATED_EXACT_MATCH` with no warnings.
+- **Identity & Warning Policy**: Excludes `AMBIGUOUS_REVIEW_REQUIRED`, `NO_MATCH`, and `SOURCE_ERROR` cases. Excludes cases with critical warnings (`DUPLICATE_QID`, `TMDB_ID_CONFLICT`, `YEAR_CONFLICT`, `LANGUAGE_CONFLICT`, `TITLE_CONFLICT`, `MISSING_WIKIDATA_QID`).
+- **Pair Comparability**: Pairs are chosen round-robin per language. Candidate pairs are scored and prioritized based on being in the same era (era match: +100) and same primary genre (+50).
+- **Genre Extraction**: Carry through actual TMDB genre names (e.g. Action, Drama) from `movies.jsonl` rather than labeling them as `unknown_genre`. If genre is missing, it is represented as an empty string.
+
 What is still true:
 
 - production ranking remains `cine-score-v1`
