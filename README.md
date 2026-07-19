@@ -1,91 +1,68 @@
 # cineSense
 
-Transparent, region-aware movie discovery with deterministic backend ranking and explicit data provenance.
+Transparent, region-aware movie discovery with deterministic backend ranking, local persistence, and explicit provenance for every score input.
 
-Current status: exact lookup, seed recommendations, the public discovery API, the manual `/discover` UI, and the internal `cine-score-v2` foundation are implemented as of July 19, 2026. Direct browser verification of `/discover` still requires local user confirmation when the agent environment cannot launch Chrome.
+## Current Status
 
-Implemented now:
-- monorepo layout with `apps/web` and `services/api`
-- FastAPI exact-title lookup endpoint at `POST /api/v1/lookup`
-- FastAPI seed recommendations endpoint at `POST /api/v1/recommendations`
-- FastAPI structured discovery endpoint at `POST /api/v1/discover`
-- PostgreSQL schema and Alembic migration for movies, aliases, external IDs, and observations
-- TMDB-backed provider adapter behind a backend-only token boundary
-- deterministic provisional `cine-score-v1`
-- internal versioned ranking dispatcher, fallback semantics, and offline shadow-comparison scaffolding for future scorers
-- Next.js UI for lookup, disambiguation, score breakdown, missing signals, provenance, freshness, on-demand seed recommendations, and manual structured discovery at `/discover`
+As of July 19, 2026, `cineSense` is past Phase 1. The committed repository implements:
 
-Verified now:
-- exact lookup, caching, scoring, and disambiguation work
-- seed recommendations work through API and UI
-- recommendations are capped at 20
-- ranking is deterministic with `cine-score-v1`
-- `cine-score-v1` is frozen behind a shared ranking input and dispatcher path
-- discovery API tests pass
-- `/discover` builds and serves locally
+- exact movie lookup with disambiguation
+- seed-based recommendations
+- structured discovery API and `/discover` UI
+- natural-language discovery interpretation behind an optional backend LLM boundary
+- versioned ranking dispatch with production pinned to `cine-score-v1`
+- offline regional evidence sampling, validation, cohort baseline building, and `cine-score-v2` shadow scoring prototypes
 
-Not implemented yet:
-- non-TMDB providers
-- authentication, payments, Redis, Celery, Kafka, Kubernetes, or LLM-authored ranking
-- free-text or LLM-driven discovery
-- streaming availability integration
+Production ranking version:
+- `cine-score-v1`
 
-Documentation map:
-- `planning.md`: scope, phases, risks, status, open questions
-- `designing.md`: system architecture and data model
-- `verification.md`: acceptance checks and user verification steps
-- `agentic.md`: LLM boundaries
-- `tools.md`: provider adapter contracts
-- `data_sources.md`: approved and prohibited sources
-- `ranking.md`: `cine-score-v1` design
-- `security_licensing.md`: security and licensing constraints
-- `code_review.md`: review checklist
-- `docs/plans/phase_1a_exact_lookup.md`: Phase 1A execution plan
-- `docs/plans/phase_1b_seed_recommendations.md`: Phase 1B execution plan
-- `docs/plans/phase_2r_cine_score_v2_foundation.md`: Phase 2R approved execution plan
-- `docs/phase_1a_achievement.md`: Phase 1A closeout
-- `docs/phase_1b_achievement.md`: Phase 1 closeout and Phase 2 planning seed
-- `docs/phase_2r_ranking_foundation.md`: Phase 2R implementation record
-- `docs/chatgpt_codex_project_workflow.md`: how to move context between ChatGPT Projects and Codex
-- `docs/decisions/0001_provider_first_ingestion.md`
-- `docs/decisions/0002_field_level_freshness.md`
-- `docs/decisions/0003_versioned_deterministic_ranking.md`
+Current non-production shadow version:
+- `cine-score-v2-shadow-1`
 
-Repo layout:
-- `apps/web`: Next.js frontend
-- `services/api`: FastAPI backend, TMDB adapter, scoring, migrations, and tests
-- `compose.yaml`: local PostgreSQL, API, and web orchestration
-- `.env.example`: local environment variable template
+Experimental or provisional capabilities:
+- natural-language discovery requires explicit `CINESENSE_LLM_*` configuration and can return controlled interpreter-unavailable responses
+- regional evidence, review gates, cohort baselines, and shadow scoring run offline through scripts and JSON/JSONL artifacts; they are not production API features
+- `cine-score-v2` is not active for user-facing ordering
 
-Local run outline:
+## Runtime Architecture
+
+- `apps/web`: Next.js 15 app for lookup, recommendations, structured discovery, and natural-language discovery UI
+- `services/api`: FastAPI service for lookup, recommendations, structured discovery, natural-language interpretation, ranking, and offline regional analysis scripts
+- PostgreSQL: canonical movie storage, aliases, external IDs, observations, and freshness-aware reuse
+- `compose.yaml`: local orchestration for `db`, `api`, and `web`
+
+## Local Setup
+
 1. Copy `.env.example` to `.env`.
-2. Replace `TMDB_API_READ_ACCESS_TOKEN` in `.env` with a real local token.
-3. Run `./scripts/start-phase-1a.sh` from the repo root.
-4. Open `http://localhost:3000`.
+2. Set `TMDB_API_READ_ACCESS_TOKEN` for lookup, recommendations, and discovery.
+3. Set `CINESENSE_LLM_*` only if you want natural-language discovery enabled locally.
+4. Run `./scripts/start-phase-1a.sh` from the repo root.
+5. Open `http://localhost:3000` or `http://localhost:3000/discover`.
 
-Default startup command after implementation:
-- `./scripts/start-phase-1a.sh`
-- Equivalent npm wrapper: `npm run start:phase-1a`
-- This uses BuildKit/Bake for cached rebuilds, rebuilds only changed layers, starts PostgreSQL, applies the API migration automatically, then runs the API and web app.
+## Core Verification
 
-What is built now:
-- A Phase 1 exact movie lookup and seed recommendation app.
-- The frontend supports exact lookup first, then on-demand similar-movie retrieval from a resolved seed, plus a dedicated `/discover` page for structured manual discovery filters.
-- The backend normalizes the request, checks PostgreSQL first, fetches from TMDB only when needed, persists canonical movies plus provenance/freshness, ranks recommendation candidates deterministically, and returns `cine-score-v1`.
-- The current success cases are one resolved movie detail card, explicit disambiguation for ambiguous titles such as `Crash`, up to 20 ranked recommendations, and up to 20 ranked discovery results from structured filters.
+- `cd services/api && ../../.venv/bin/pytest -q`
+- `cd apps/web && npm run build`
+- `cd services/api && ../../.venv/bin/python scripts/audit_regional_ranking.py`
+- `cd services/api && ../../.venv/bin/python scripts/build_regional_evidence_sample.py --help`
+- `cd services/api && ../../.venv/bin/python scripts/build_regional_cohort_baselines.py --help`
+- `cd services/api && ../../.venv/bin/python scripts/run_regional_shadow_scoring.py --help`
 
-How to check frontend and backend as a user:
-1. Create `.env` from `.env.example` and set a real local `TMDB_API_READ_ACCESS_TOKEN`.
-2. Run `./scripts/start-phase-1a.sh`.
-3. Open the frontend in a browser and confirm the form shows `Title`, `Release year`, `Region`, and `Media type`.
-4. Search for `The Dark Knight` with year `2008`.
-5. Confirm the page shows one movie result with a score, freshness, provenance, aliases, and missing signals.
-6. Repeat the same search and confirm the app still works and reports cached/local reuse rather than behaving like a blank first fetch.
-7. Search for `Crash` and confirm the UI shows disambiguation choices instead of silently picking one movie.
-8. Confirm the TMDB token never appears in the page, browser network payloads, or API response body.
-9. Open `http://localhost:3000/discover`.
-10. Confirm the page shows navigation between `Exact Lookup` and `Discover Movies`.
-11. Confirm discovery exposes only structured filters: genres, original language, region, year bounds, runtime bounds, minimum evidence count, and page size.
-12. Confirm regional streaming availability is shown as disabled / coming later.
-13. Submit a narrowed filter set such as genres `Action` + `Drama`, release year min `1990`, page size `2`.
-14. Confirm ranked discovery results render with score, breakdown, missing signals, provenance, freshness, pagination, and poster fallback when needed.
+## Documentation Map
+
+- `planning.md`: current phase ledger, milestone status, risks, blockers, open decisions
+- `designing.md`: implemented runtime boundaries, persistence model, discovery flow, and offline evidence/shadow pipeline
+- `verification.md`: current automated checks, user verification steps, and offline artifact checks
+- `agentic.md`: LLM interpreter boundary and deterministic backend ownership
+- `tools.md`: TMDB, Wikidata, interpreter, and offline script/tool contracts
+- `data_sources.md`: approved, provisional, and prohibited sources
+- `ranking.md`: `cine-score-v1`, versioned ranking dispatch, and `cine-score-v2` shadow prototype status
+- `security_licensing.md`: secret handling, scraping prohibitions, review-file safety, and launch gates
+- `code_review.md`: review checklist for the implemented platform
+- `docs/plans/`: phase plans and accepted scope boundaries
+- `docs/phase_*.md`: concise completion and handoff notes
+- `docs/decisions/`: durable architecture decisions
+
+## Next Milestone
+
+The next milestone is not another production feature. It is proving whether the offline regional evidence and `cine-score-v2` shadow pipeline is good enough to justify a future activation plan. Current uncommitted work on regional shadow evaluation is not part of the last committed milestone.

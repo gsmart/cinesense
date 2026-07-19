@@ -11,5 +11,3 @@ build/
 coverage/
 *.pyc
 *.egg-info/
-*.md
-!README.md
