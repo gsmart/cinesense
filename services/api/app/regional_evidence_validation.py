@@ -24,11 +24,11 @@ AMBIGUOUS_REVIEW_REQUIRED = "AMBIGUOUS_REVIEW_REQUIRED"
 NO_MATCH = "NO_MATCH"
 SOURCE_ERROR = "SOURCE_ERROR"
 
-GO_FOR_EXPANDED_SAMPLE = "GO_FOR_EXPANDED_SAMPLE"
-GO_WITH_WARNINGS = "GO_WITH_WARNINGS"
-MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
+GO_FOR_COHORT_BASELINES = "GO_FOR_COHORT_BASELINES"
+GO_WITH_LIMITED_LANGUAGE_SCOPE = "GO_WITH_LIMITED_LANGUAGE_SCOPE"
+MORE_MANUAL_REVIEW_REQUIRED = "MORE_MANUAL_REVIEW_REQUIRED"
 BLOCKED_BY_LOW_COVERAGE = "BLOCKED_BY_LOW_COVERAGE"
-BLOCKED_BY_DATA_INTEGRITY = "BLOCKED_BY_DATA_INTEGRITY"
+BLOCKED_BY_ENTITY_RESOLUTION_QUALITY = "BLOCKED_BY_ENTITY_RESOLUTION_QUALITY"
 
 MISSING_NATIVE_LABEL = "MISSING_NATIVE_LABEL"
 MISSING_ALIASES = "MISSING_ALIASES"
@@ -47,7 +47,12 @@ MISSING_WIKIDATA_QID = "MISSING_WIKIDATA_QID"
 VALIDATOR_VERSION = "regional-evidence-validation-v1"
 DEFAULT_REVIEW_SAMPLE_SIZE = 10
 DEFAULT_MINIMUM_EXACT_COVERAGE = 0.70
-DEFAULT_MAXIMUM_AMBIGUOUS_ERROR_RATE = 0.10
+DEFAULT_MINIMUM_COMPLETE_IDENTITY_COVERAGE = 0.70
+DEFAULT_MINIMUM_REVIEW_CONFIRMATION_RATE = 0.90
+DEFAULT_MAXIMUM_CRITICAL_WARNING_REJECTION_RATE = 0.10
+DEFAULT_MAXIMUM_UNRESOLVED_AMBIGUITY_RATE = 0.10
+DEFAULT_MINIMUM_REVIEWED_ROWS = 10
+DEFAULT_MINIMUM_LANGUAGE_REVIEWED_ROWS = 3
 ACCEPTED_REVIEW_DECISIONS = {"", "CONFIRMED", "REJECTED", "NEEDS_FOLLOW_UP"}
 CRITICAL_WARNINGS = {DUPLICATE_QID, TMDB_ID_CONFLICT, YEAR_CONFLICT, LANGUAGE_CONFLICT, TITLE_CONFLICT}
 REQUIRED_FILES = (
@@ -106,7 +111,12 @@ SECRET_PATTERNS = (
 @dataclass(frozen=True)
 class ValidationThresholds:
     minimum_exact_coverage: float = DEFAULT_MINIMUM_EXACT_COVERAGE
-    maximum_ambiguous_error_rate: float = DEFAULT_MAXIMUM_AMBIGUOUS_ERROR_RATE
+    minimum_complete_identity_coverage: float = DEFAULT_MINIMUM_COMPLETE_IDENTITY_COVERAGE
+    minimum_review_confirmation_rate: float = DEFAULT_MINIMUM_REVIEW_CONFIRMATION_RATE
+    maximum_critical_warning_rejection_rate: float = DEFAULT_MAXIMUM_CRITICAL_WARNING_REJECTION_RATE
+    maximum_unresolved_ambiguity_rate: float = DEFAULT_MAXIMUM_UNRESOLVED_AMBIGUITY_RATE
+    minimum_reviewed_rows: int = DEFAULT_MINIMUM_REVIEWED_ROWS
+    minimum_language_reviewed_rows: int = DEFAULT_MINIMUM_LANGUAGE_REVIEWED_ROWS
     strict: bool = False
 
 
@@ -145,12 +155,17 @@ def validate_regional_evidence_run(
         requested_languages=context.requested_languages,
         sample_size=review_sample_size,
     )
-    review_stats = _load_review_stats(review_file) if review_file is not None else _empty_review_stats()
+    review_stats = (
+        _load_review_stats(review_file, validated_matches=validated_matches, requested_languages=context.requested_languages)
+        if review_file is not None
+        else _empty_review_stats(context.requested_languages)
+    )
     recommendation = _final_recommendation(
         integrity_errors=context.integrity_errors,
         secret_findings=context.secret_findings,
         coverage=coverage,
-        warning_counts=warning_counts,
+        review_stats=review_stats,
+        requested_languages=context.requested_languages,
         thresholds=thresholds,
     )
 
@@ -208,7 +223,12 @@ def validate_regional_evidence_run(
         },
         "thresholds_used": {
             "minimum_exact_coverage": thresholds.minimum_exact_coverage,
-            "maximum_ambiguous_error_rate": thresholds.maximum_ambiguous_error_rate,
+            "minimum_complete_identity_coverage": thresholds.minimum_complete_identity_coverage,
+            "minimum_review_confirmation_rate": thresholds.minimum_review_confirmation_rate,
+            "maximum_critical_warning_rejection_rate": thresholds.maximum_critical_warning_rejection_rate,
+            "maximum_unresolved_ambiguity_rate": thresholds.maximum_unresolved_ambiguity_rate,
+            "minimum_reviewed_rows": thresholds.minimum_reviewed_rows,
+            "minimum_language_reviewed_rows": thresholds.minimum_language_reviewed_rows,
         },
         "strict_mode": thresholds.strict,
         "review_sample_size": review_sample_size,
@@ -489,34 +509,46 @@ def _build_review_sample(
     sample_size: int,
 ) -> list[dict[str, Any]]:
     sample_size = max(0, sample_size)
-    grouped: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for match in sorted(
-        validated_matches,
-        key=lambda row: (row["validation_classification"], row.get("language") or "", row["tmdb_movie_id"]),
-    ):
-        grouped[(row_language(match), match["validation_classification"])].append(match)
-
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for classification in CLASSIFICATION_ORDER:
+    by_priority: defaultdict[int, list[dict[str, Any]]] = defaultdict(list)
+    for match in sorted(validated_matches, key=_review_priority_sort_key):
+        by_priority[_review_priority(match)].append(match)
+
+    for priority in sorted(by_priority):
+        bucket_rows = by_priority[priority]
+        by_language: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+        for match in bucket_rows:
+            by_language[row_language(match)].append(match)
+
         for language in requested_languages:
-            candidates = grouped.get((language, classification), [])
-            if candidates and candidates[0]["tmdb_movie_id"] not in seen:
-                rows.append(_review_row(candidates[0]))
-                seen.add(candidates[0]["tmdb_movie_id"])
+            by_language.setdefault(language, [])
+
+        while True:
+            added_in_cycle = False
+            for language in requested_languages:
+                while by_language[language]:
+                    match = by_language[language].pop(0)
+                    if match["tmdb_movie_id"] in seen:
+                        continue
+                    rows.append(_review_row(match))
+                    seen.add(match["tmdb_movie_id"])
+                    added_in_cycle = True
+                    break
+                if len(rows) >= sample_size:
+                    return rows[:sample_size]
+            if not added_in_cycle:
+                break
+
+        leftovers = sorted(
+            (match for match in bucket_rows if match["tmdb_movie_id"] not in seen),
+            key=_review_priority_sort_key,
+        )
+        for match in leftovers:
+            rows.append(_review_row(match))
+            seen.add(match["tmdb_movie_id"])
             if len(rows) >= sample_size:
                 return rows[:sample_size]
-
-    for match in sorted(
-        validated_matches,
-        key=lambda row: (row.get("language") or "", row["validation_classification"], row["tmdb_movie_id"]),
-    ):
-        if match["tmdb_movie_id"] in seen:
-            continue
-        rows.append(_review_row(match))
-        seen.add(match["tmdb_movie_id"])
-        if len(rows) >= sample_size:
-            break
     return rows[:sample_size]
 
 
@@ -547,20 +579,46 @@ def _write_review_sample_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _load_review_stats(review_file: Path) -> dict[str, Any]:
+def _load_review_stats(
+    review_file: Path,
+    *,
+    validated_matches: list[dict[str, Any]],
+    requested_languages: list[str],
+) -> dict[str, Any]:
+    matches_by_id = {str(match["tmdb_movie_id"]): match for match in validated_matches}
     with Path(review_file).open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
-        decisions: list[str] = []
+        reviewed_rows: list[dict[str, Any]] = []
         for row in reader:
             decision = str(row.get("reviewer_decision") or "").strip()
             if decision not in ACCEPTED_REVIEW_DECISIONS:
                 raise ValueError(f"invalid reviewer decision: {decision}")
             if decision:
-                decisions.append(decision)
-    reviewed_count = len(decisions)
-    confirmed_count = sum(1 for decision in decisions if decision == "CONFIRMED")
-    rejected_count = sum(1 for decision in decisions if decision == "REJECTED")
-    follow_up_count = sum(1 for decision in decisions if decision == "NEEDS_FOLLOW_UP")
+                tmdb_movie_id = str(row.get("tmdb_movie_id") or "").strip()
+                reviewed_rows.append(
+                    {
+                        "tmdb_movie_id": tmdb_movie_id,
+                        "decision": decision,
+                        "match": matches_by_id.get(tmdb_movie_id),
+                    }
+                )
+
+    reviewed_count = len(reviewed_rows)
+    confirmed_count = sum(1 for row in reviewed_rows if row["decision"] == "CONFIRMED")
+    rejected_count = sum(1 for row in reviewed_rows if row["decision"] == "REJECTED")
+    follow_up_count = sum(1 for row in reviewed_rows if row["decision"] == "NEEDS_FOLLOW_UP")
+    per_language: dict[str, dict[str, Any]] = {}
+    for language in requested_languages:
+        language_rows = [row for row in reviewed_rows if row["match"] and row["match"].get("language") == language]
+        per_language[language] = _review_metrics_for_rows(language_rows)
+
+    critical_rows = [row for row in reviewed_rows if row["match"] and _has_critical_warning(row["match"])]
+    exact_rows = [
+        row
+        for row in reviewed_rows
+        if row["match"]
+        and row["match"]["validation_classification"] in {VALIDATED_EXACT_MATCH, EXACT_MATCH_WITH_WARNINGS}
+    ]
     return {
         "reviewed_count": reviewed_count,
         "confirmed_count": confirmed_count,
@@ -568,10 +626,25 @@ def _load_review_stats(review_file: Path) -> dict[str, Any]:
         "follow_up_count": follow_up_count,
         "confirmation_rate": _safe_rate(confirmed_count, reviewed_count),
         "rejection_rate": _safe_rate(rejected_count, reviewed_count),
+        "per_language": per_language,
+        "critical_warning_reviewed_count": len(critical_rows),
+        "critical_warning_rejected_count": sum(1 for row in critical_rows if row["decision"] == "REJECTED"),
+        "critical_warning_rejection_rate": _safe_rate(
+            sum(1 for row in critical_rows if row["decision"] == "REJECTED"),
+            len(critical_rows),
+        ),
+        "exact_match_reviewed_count": len(exact_rows),
+        "exact_match_confirmed_count": sum(1 for row in exact_rows if row["decision"] == "CONFIRMED"),
+        "exact_match_precision_estimate": _safe_rate(
+            sum(1 for row in exact_rows if row["decision"] == "CONFIRMED"),
+            len(exact_rows),
+        ),
+        "unresolved_ambiguity_count": follow_up_count,
+        "unresolved_ambiguity_rate": _safe_rate(follow_up_count, reviewed_count),
     }
 
 
-def _empty_review_stats() -> dict[str, Any]:
+def _empty_review_stats(requested_languages: list[str]) -> dict[str, Any]:
     return {
         "reviewed_count": 0,
         "confirmed_count": 0,
@@ -579,6 +652,18 @@ def _empty_review_stats() -> dict[str, Any]:
         "follow_up_count": 0,
         "confirmation_rate": None,
         "rejection_rate": None,
+        "per_language": {
+            language: _review_metrics_for_rows([])
+            for language in requested_languages
+        },
+        "critical_warning_reviewed_count": 0,
+        "critical_warning_rejected_count": 0,
+        "critical_warning_rejection_rate": None,
+        "exact_match_reviewed_count": 0,
+        "exact_match_confirmed_count": 0,
+        "exact_match_precision_estimate": None,
+        "unresolved_ambiguity_count": 0,
+        "unresolved_ambiguity_rate": None,
     }
 
 
@@ -587,39 +672,157 @@ def _final_recommendation(
     integrity_errors: list[str],
     secret_findings: list[str],
     coverage: dict[str, Any],
-    warning_counts: Counter[str],
+    review_stats: dict[str, Any],
+    requested_languages: list[str],
     thresholds: ValidationThresholds,
 ) -> str:
     if integrity_errors or secret_findings:
-        return BLOCKED_BY_DATA_INTEGRITY
+        return BLOCKED_BY_ENTITY_RESOLUTION_QUALITY
 
     aggregate = coverage["aggregate"]
-    total = aggregate["total_sampled_movies"]
-    exact_coverage = _safe_rate(
-        aggregate["validated_exact_matches"] + aggregate["exact_matches_with_warnings"],
-        total,
-    ) or 0.0
-    ambiguous_error_rate = _safe_rate(
-        aggregate["ambiguous_matches"] + aggregate["source_errors"],
-        total,
-    ) or 0.0
-    if exact_coverage < thresholds.minimum_exact_coverage:
-        return BLOCKED_BY_LOW_COVERAGE
-    if ambiguous_error_rate > thresholds.maximum_ambiguous_error_rate:
-        return MANUAL_REVIEW_REQUIRED
+    exact_coverage = aggregate_exact_coverage(aggregate) or 0.0
+    complete_identity_coverage = aggregate["complete_identity_coverage"]["percentage"] or 0.0
     if (
-        aggregate["exact_matches_with_warnings"] > 0
-        or aggregate["no_matches"] > 0
-        or aggregate["ambiguous_matches"] > 0
-        or aggregate["source_errors"] > 0
-        or bool(warning_counts)
+        exact_coverage < thresholds.minimum_exact_coverage
+        or complete_identity_coverage < thresholds.minimum_complete_identity_coverage
     ):
-        return GO_WITH_WARNINGS
-    return GO_FOR_EXPANDED_SAMPLE
+        return BLOCKED_BY_LOW_COVERAGE
+
+    overall_gate = _language_gate_passes(
+        coverage=aggregate,
+        review_metrics=review_stats,
+        thresholds=thresholds,
+        require_all_quality_checks=True,
+    )
+    if aggregate["source_errors"] == 0 and _languages_represented(coverage, requested_languages) and overall_gate:
+        return GO_FOR_COHORT_BASELINES
+
+    eligible_languages = [
+        language
+        for language in requested_languages
+        if _language_gate_passes(
+            coverage=coverage["per_language"].get(language, {}),
+            review_metrics=review_stats["per_language"].get(language, _review_metrics_for_rows([])),
+            thresholds=thresholds,
+            require_all_quality_checks=False,
+        )
+    ]
+    if 0 < len(eligible_languages) < len(requested_languages):
+        return GO_WITH_LIMITED_LANGUAGE_SCOPE
+    if review_stats["reviewed_count"] < thresholds.minimum_reviewed_rows:
+        return MORE_MANUAL_REVIEW_REQUIRED
+    return BLOCKED_BY_ENTITY_RESOLUTION_QUALITY
 
 
 def row_language(match: dict[str, Any]) -> str:
     return str(match.get("language") or "")
+
+
+def aggregate_exact_coverage(metrics: dict[str, Any]) -> float | None:
+    return _safe_rate(
+        metrics.get("validated_exact_matches", 0) + metrics.get("exact_matches_with_warnings", 0),
+        metrics.get("total_sampled_movies", 0),
+    )
+
+
+def _languages_represented(coverage: dict[str, Any], requested_languages: list[str]) -> bool:
+    return all(coverage["per_language"].get(language, {}).get("total_sampled_movies", 0) > 0 for language in requested_languages)
+
+
+def _review_metrics_for_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    reviewed_count = len(rows)
+    confirmed_count = sum(1 for row in rows if row["decision"] == "CONFIRMED")
+    rejected_count = sum(1 for row in rows if row["decision"] == "REJECTED")
+    follow_up_count = sum(1 for row in rows if row["decision"] == "NEEDS_FOLLOW_UP")
+    critical_rows = [row for row in rows if row["match"] and _has_critical_warning(row["match"])]
+    exact_rows = [
+        row
+        for row in rows
+        if row["match"]
+        and row["match"]["validation_classification"] in {VALIDATED_EXACT_MATCH, EXACT_MATCH_WITH_WARNINGS}
+    ]
+    return {
+        "reviewed_count": reviewed_count,
+        "confirmed_count": confirmed_count,
+        "rejected_count": rejected_count,
+        "follow_up_count": follow_up_count,
+        "confirmation_rate": _safe_rate(confirmed_count, reviewed_count),
+        "rejection_rate": _safe_rate(rejected_count, reviewed_count),
+        "critical_warning_reviewed_count": len(critical_rows),
+        "critical_warning_rejected_count": sum(1 for row in critical_rows if row["decision"] == "REJECTED"),
+        "critical_warning_rejection_rate": _safe_rate(
+            sum(1 for row in critical_rows if row["decision"] == "REJECTED"),
+            len(critical_rows),
+        ),
+        "exact_match_reviewed_count": len(exact_rows),
+        "exact_match_confirmed_count": sum(1 for row in exact_rows if row["decision"] == "CONFIRMED"),
+        "exact_match_precision_estimate": _safe_rate(
+            sum(1 for row in exact_rows if row["decision"] == "CONFIRMED"),
+            len(exact_rows),
+        ),
+        "unresolved_ambiguity_count": follow_up_count,
+        "unresolved_ambiguity_rate": _safe_rate(follow_up_count, reviewed_count),
+    }
+
+
+def _language_gate_passes(
+    *,
+    coverage: dict[str, Any],
+    review_metrics: dict[str, Any],
+    thresholds: ValidationThresholds,
+    require_all_quality_checks: bool,
+) -> bool:
+    if not coverage:
+        return False
+    exact_coverage = aggregate_exact_coverage(coverage) or 0.0
+    complete_identity_coverage = coverage.get("complete_identity_coverage", {}).get("percentage") or 0.0
+    if (
+        exact_coverage < thresholds.minimum_exact_coverage
+        or complete_identity_coverage < thresholds.minimum_complete_identity_coverage
+        or coverage.get("source_errors", 0) > 0
+    ):
+        return False
+    minimum_reviewed = thresholds.minimum_reviewed_rows if require_all_quality_checks else thresholds.minimum_language_reviewed_rows
+    if review_metrics.get("reviewed_count", 0) < minimum_reviewed:
+        return False
+    confirmation_rate = review_metrics.get("confirmation_rate")
+    if confirmation_rate is None or confirmation_rate < thresholds.minimum_review_confirmation_rate:
+        return False
+    critical_warning_rejection_rate = review_metrics.get("critical_warning_rejection_rate")
+    if critical_warning_rejection_rate is not None and critical_warning_rejection_rate > thresholds.maximum_critical_warning_rejection_rate:
+        return False
+    unresolved_ambiguity_rate = review_metrics.get("unresolved_ambiguity_rate")
+    if unresolved_ambiguity_rate is not None and unresolved_ambiguity_rate > thresholds.maximum_unresolved_ambiguity_rate:
+        return False
+    return True
+
+
+def _has_critical_warning(match: dict[str, Any]) -> bool:
+    return any(warning in CRITICAL_WARNINGS or warning == MISSING_WIKIDATA_QID for warning in match.get("warnings", []))
+
+
+def _review_priority(match: dict[str, Any]) -> int:
+    classification = match["validation_classification"]
+    if classification == AMBIGUOUS_REVIEW_REQUIRED:
+        return 0
+    if classification == SOURCE_ERROR:
+        return 1
+    if classification == EXACT_MATCH_WITH_WARNINGS and _has_critical_warning(match):
+        return 2
+    if classification == NO_MATCH:
+        return 3
+    if classification == EXACT_MATCH_WITH_WARNINGS:
+        return 4
+    return 5
+
+
+def _review_priority_sort_key(match: dict[str, Any]) -> tuple[int, str, int, str]:
+    return (
+        _review_priority(match),
+        row_language(match),
+        -len(match.get("warnings", [])),
+        str(match["tmdb_movie_id"]),
+    )
 
 
 def _metric(count: int, denominator: int) -> dict[str, Any]:

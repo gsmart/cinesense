@@ -454,3 +454,22 @@ def test_failed_wikidata_batch_preserves_successful_batches_and_is_deterministic
     error_record = next(record for record in records if record["tmdb_source_movie_id"] == "21")
     assert error_record["match_status"] == WIKIDATA_ERROR
     assert error_record["warnings"] == ["wikidata_batch_failed:unexpected_error"]
+
+
+def test_tmdb_sampling_supports_fifty_per_language_and_preserves_deterministic_language_blocks(tmp_path):
+    pages = {}
+    for language in ("mr", "ml", "ta"):
+        pages[(language, 1)] = [make_candidate(f"{language}-1-{index}", f"{language.upper()} Movie {index}", original_language=language, provider_position=index - 1) for index in range(1, 21)]
+        pages[(language, 2)] = [make_candidate(f"{language}-2-{index}", f"{language.upper()} Movie {20 + index}", original_language=language, provider_position=index - 1) for index in range(1, 21)]
+        pages[(language, 3)] = [make_candidate(f"{language}-3-{index}", f"{language.upper()} Movie {40 + index}", original_language=language, provider_position=index - 1) for index in range(1, 11)]
+    tmdb = FakeTmdb(pages)
+    pipeline = RegionalEvidencePipeline(settings=make_settings(), tmdb=tmdb, wikidata=FakeWikidata())
+
+    manifest = asyncio.run(pipeline.build(languages=["mr", "ml", "ta"], limit_per_language=50, output_dir=tmp_path / "run"))
+
+    movies = read_jsonl(tmp_path / "run" / "movies.jsonl")
+    assert manifest["record_counts"]["movies"] == 150
+    assert [movie["requested_language"] for movie in movies[:50]] == ["mr"] * 50
+    assert [movie["requested_language"] for movie in movies[50:100]] == ["ml"] * 50
+    assert [movie["requested_language"] for movie in movies[100:150]] == ["ta"] * 50
+    assert [movie["provider_position"] for movie in movies[:50]] == list(range(50))

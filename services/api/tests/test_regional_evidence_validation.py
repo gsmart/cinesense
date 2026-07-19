@@ -9,12 +9,12 @@ import pytest
 import app.regional_evidence_validation as rv
 from app.regional_evidence import WIKIDATA_AMBIGUOUS, WIKIDATA_ERROR, WIKIDATA_EXACT, WIKIDATA_NONE
 from app.regional_evidence_validation import (
-    BLOCKED_BY_DATA_INTEGRITY,
     BLOCKED_BY_LOW_COVERAGE,
+    BLOCKED_BY_ENTITY_RESOLUTION_QUALITY,
     EXACT_MATCH_WITH_WARNINGS,
-    GO_FOR_EXPANDED_SAMPLE,
-    GO_WITH_WARNINGS,
-    MANUAL_REVIEW_REQUIRED,
+    GO_FOR_COHORT_BASELINES,
+    GO_WITH_LIMITED_LANGUAGE_SCOPE,
+    MORE_MANUAL_REVIEW_REQUIRED,
     SOURCE_ERROR,
     VALIDATED_EXACT_MATCH,
     ValidationThresholds,
@@ -206,13 +206,21 @@ def write_run_dir(
     return run_dir
 
 
+def write_review_file(path: Path, rows: list[dict]) -> Path:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rv.REVIEW_SAMPLE_COLUMNS))
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
 def test_validate_run_directory_and_outputs_are_created(tmp_path):
     run_dir = write_run_dir(tmp_path)
 
     result = validate_regional_evidence_run(run_dir=run_dir)
 
     output_dir = run_dir / "validation"
-    assert result["final_recommendation"] == GO_FOR_EXPANDED_SAMPLE
+    assert result["final_recommendation"] == MORE_MANUAL_REVIEW_REQUIRED
     assert output_dir.exists()
     assert (output_dir / "validated_matches.jsonl").exists()
     assert (output_dir / "validation_summary.json").exists()
@@ -253,7 +261,7 @@ def test_integrity_failures_cover_manifest_counts_hashes_duplicates_and_unknown_
 
     result = validate_regional_evidence_run(run_dir=run_dir)
 
-    assert result["final_recommendation"] == BLOCKED_BY_DATA_INTEGRITY
+    assert result["final_recommendation"] == BLOCKED_BY_ENTITY_RESOLUTION_QUALITY
     assert "manifest_count_mismatch:movies" in result["context"].integrity_errors
     assert "manifest_hash_mismatch:movies.jsonl" in result["context"].integrity_errors
     assert "duplicate_tmdb_movie_ids" in result["context"].integrity_errors
@@ -393,76 +401,95 @@ def test_review_sample_is_deterministic_balanced_and_supports_review_import(tmp_
     assert {row["validation_classification"] for row in first_rows} >= {VALIDATED_EXACT_MATCH, EXACT_MATCH_WITH_WARNINGS, "NO_MATCH", SOURCE_ERROR}
 
     review_file = run_dir / "completed-review.csv"
-    with review_file.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rv.REVIEW_SAMPLE_COLUMNS))
-        writer.writeheader()
-        writer.writerows(
-            [
-                {
-                    "tmdb_movie_id": "1",
-                    "wikidata_qid": "Q1",
-                    "language": "mr",
-                    "tmdb_title": "Sairat",
-                    "tmdb_original_title": "Sairat",
-                    "wikidata_label": "Sairat",
-                    "wikidata_aliases": "Sairat",
-                    "tmdb_release_year": "2020",
-                    "wikidata_release_year": "2020",
-                    "director": "Director A",
-                    "country": "India",
-                    "validation_classification": VALIDATED_EXACT_MATCH,
-                    "warnings": "",
-                    "reviewer_decision": "CONFIRMED",
-                    "reviewer_notes": "",
-                },
-                {
-                    "tmdb_movie_id": "2",
-                    "wikidata_qid": "Q2",
-                    "language": "ml",
-                    "tmdb_title": "Minnal",
-                    "tmdb_original_title": "Minnal",
-                    "wikidata_label": "Minnal",
-                    "wikidata_aliases": "",
-                    "tmdb_release_year": "2020",
-                    "wikidata_release_year": "2020",
-                    "director": "Director A",
-                    "country": "India",
-                    "validation_classification": EXACT_MATCH_WITH_WARNINGS,
-                    "warnings": "MISSING_ALIASES",
-                    "reviewer_decision": "REJECTED",
-                    "reviewer_notes": "",
-                },
-                {
-                    "tmdb_movie_id": "3",
-                    "wikidata_qid": "",
-                    "language": "mr",
-                    "tmdb_title": "Unknown",
-                    "tmdb_original_title": "Unknown",
-                    "wikidata_label": "",
-                    "wikidata_aliases": "",
-                    "tmdb_release_year": "",
-                    "wikidata_release_year": "",
-                    "director": "",
-                    "country": "",
-                    "validation_classification": "NO_MATCH",
-                    "warnings": "",
-                    "reviewer_decision": "NEEDS_FOLLOW_UP",
-                    "reviewer_notes": "",
-                },
-            ]
-        )
+    write_review_file(
+        review_file,
+        [
+            {
+                "tmdb_movie_id": "1",
+                "wikidata_qid": "Q1",
+                "language": "mr",
+                "tmdb_title": "Sairat",
+                "tmdb_original_title": "Sairat",
+                "wikidata_label": "Sairat",
+                "wikidata_aliases": "Sairat",
+                "tmdb_release_year": "2020",
+                "wikidata_release_year": "2020",
+                "director": "Director A",
+                "country": "India",
+                "validation_classification": VALIDATED_EXACT_MATCH,
+                "warnings": "",
+                "reviewer_decision": "CONFIRMED",
+                "reviewer_notes": "",
+            },
+            {
+                "tmdb_movie_id": "2",
+                "wikidata_qid": "Q2",
+                "language": "ml",
+                "tmdb_title": "Minnal",
+                "tmdb_original_title": "Minnal",
+                "wikidata_label": "Minnal",
+                "wikidata_aliases": "",
+                "tmdb_release_year": "2020",
+                "wikidata_release_year": "2020",
+                "director": "Director A",
+                "country": "India",
+                "validation_classification": EXACT_MATCH_WITH_WARNINGS,
+                "warnings": "MISSING_ALIASES",
+                "reviewer_decision": "REJECTED",
+                "reviewer_notes": "",
+            },
+            {
+                "tmdb_movie_id": "3",
+                "wikidata_qid": "",
+                "language": "mr",
+                "tmdb_title": "Unknown",
+                "tmdb_original_title": "Unknown",
+                "wikidata_label": "",
+                "wikidata_aliases": "",
+                "tmdb_release_year": "",
+                "wikidata_release_year": "",
+                "director": "",
+                "country": "",
+                "validation_classification": "NO_MATCH",
+                "warnings": "",
+                "reviewer_decision": "NEEDS_FOLLOW_UP",
+                "reviewer_notes": "",
+            },
+        ],
+    )
     reviewed = validate_regional_evidence_run(run_dir=run_dir, review_file=review_file)
     assert reviewed["review_stats"]["reviewed_count"] == 3
     assert reviewed["review_stats"]["confirmed_count"] == 1
     assert reviewed["review_stats"]["rejected_count"] == 1
     assert reviewed["review_stats"]["follow_up_count"] == 1
     assert reviewed["review_stats"]["confirmation_rate"] == pytest.approx(0.3333, abs=0.0001)
+    assert reviewed["review_stats"]["per_language"]["mr"]["confirmation_rate"] == pytest.approx(0.5, abs=0.0001)
+    assert reviewed["review_stats"]["critical_warning_rejection_rate"] is None
+    assert reviewed["review_stats"]["exact_match_precision_estimate"] == pytest.approx(0.5, abs=0.0001)
+    assert reviewed["review_stats"]["unresolved_ambiguity_count"] == 1
 
     invalid_review = run_dir / "invalid-review.csv"
-    invalid_review.write_text(
-        "tmdb_movie_id,wikidata_qid,language,tmdb_title,tmdb_original_title,wikidata_label,wikidata_aliases,tmdb_release_year,wikidata_release_year,director,country,validation_classification,warnings,reviewer_decision,reviewer_notes\n"
-        "1,Q1,mr,Sairat,Sairat,Sairat,Sairat,2020,2020,Director A,India,VALIDATED_EXACT_MATCH,,MAYBE,\n",
-        encoding="utf-8",
+    write_review_file(
+        invalid_review,
+        [
+            {
+                "tmdb_movie_id": "1",
+                "wikidata_qid": "Q1",
+                "language": "mr",
+                "tmdb_title": "Sairat",
+                "tmdb_original_title": "Sairat",
+                "wikidata_label": "Sairat",
+                "wikidata_aliases": "Sairat",
+                "tmdb_release_year": "2020",
+                "wikidata_release_year": "2020",
+                "director": "Director A",
+                "country": "India",
+                "validation_classification": VALIDATED_EXACT_MATCH,
+                "warnings": "",
+                "reviewer_decision": "MAYBE",
+                "reviewer_notes": "",
+            }
+        ],
     )
     with pytest.raises(ValueError, match="invalid reviewer decision"):
         validate_regional_evidence_run(run_dir=run_dir, review_file=invalid_review)
@@ -473,38 +500,44 @@ def test_secret_detection_blocks_run(tmp_path):
 
     result = validate_regional_evidence_run(run_dir=run_dir)
 
-    assert result["final_recommendation"] == BLOCKED_BY_DATA_INTEGRITY
+    assert result["final_recommendation"] == BLOCKED_BY_ENTITY_RESOLUTION_QUALITY
     assert result["context"].secret_findings == ["secret_pattern_detected:coverage_summary.json"]
 
 
-def test_recommendation_thresholds_cover_warnings_manual_review_low_coverage_and_blocked(tmp_path):
-    go_with_warnings_dir = write_run_dir(
-        tmp_path,
-        run_id="20260719T131735Z",
-        movies=[movie_record("1", "Sairat"), movie_record("2", "Minnal", requested_language="ml", original_language="ml")],
-        wikidata_matches=[
-            wikidata_record("1", qid="Q1", english_label="Sairat", native_label="सैराट", aliases=["Sairat"]),
-            wikidata_record("2", qid="Q2", english_label="Minnal", native_label="മിന്നൽ", native_language="ml", aliases=[]),
-        ],
-    )
-    assert validate_regional_evidence_run(run_dir=go_with_warnings_dir)["final_recommendation"] == GO_WITH_WARNINGS
+def test_review_sample_prioritizes_ambiguous_critical_and_balances_languages(tmp_path):
+    movies = [
+        movie_record("1", "A", requested_language="mr"),
+        movie_record("2", "B", requested_language="ml"),
+        movie_record("3", "C", requested_language="ta"),
+        movie_record("4", "D", requested_language="mr"),
+        movie_record("5", "E", requested_language="ml"),
+        movie_record("6", "F", requested_language="ta"),
+    ]
+    wikidata_matches = [
+        wikidata_record("1", match_status=WIKIDATA_AMBIGUOUS, qid=None, english_label=None, native_label=None, aliases=[]),
+        wikidata_record("2", match_status=WIKIDATA_ERROR, qid=None, english_label=None, native_label=None, aliases=[]),
+        wikidata_record("3", qid="Q3", english_label="C", native_label="சி", native_language="ta", aliases=["C"], publication_date="2019-01-01T00:00:00Z"),
+        wikidata_record("4", match_status=WIKIDATA_NONE, qid=None, english_label=None, native_label=None, aliases=[]),
+        wikidata_record("5", qid="Q5", english_label="E", native_label="ഇ", native_language="ml", aliases=[]),
+        wikidata_record("6", qid="Q6", english_label="F", native_label="எப்", native_language="ta", aliases=["F"]),
+    ]
+    movies[2]["release_year"] = 2020
+    run_dir = write_run_dir(tmp_path, run_id="20260719T131739Z", movies=movies, wikidata_matches=wikidata_matches, requested_languages=["mr", "ml", "ta"])
 
-    manual_review_movies = [movie_record(str(index), f"Movie {index}") for index in range(1, 9)] + [movie_record("9", "Ambiguous")]
-    manual_review_matches = [
-        wikidata_record(str(index), qid=f"Q{index}", english_label=f"Movie {index}", native_label=f"Movie {index}", aliases=[f"Movie {index}"])
-        for index in range(1, 9)
-    ] + [wikidata_record("9", match_status=WIKIDATA_AMBIGUOUS, qid=None, english_label=None, native_label=None, aliases=[])]
-    manual_review_dir = write_run_dir(
-        tmp_path,
-        run_id="20260719T131736Z",
-        movies=manual_review_movies,
-        wikidata_matches=manual_review_matches,
-    )
-    assert validate_regional_evidence_run(run_dir=manual_review_dir)["final_recommendation"] == MANUAL_REVIEW_REQUIRED
+    validate_regional_evidence_run(run_dir=run_dir, review_sample_size=6)
+    rows = list(csv.DictReader((run_dir / "validation" / "review_sample.csv").open(encoding="utf-8")))
 
+    assert rows[0]["validation_classification"] == "AMBIGUOUS_REVIEW_REQUIRED"
+    assert rows[1]["validation_classification"] == "AMBIGUOUS_REVIEW_REQUIRED"
+    assert rows[2]["validation_classification"] == SOURCE_ERROR
+    assert "YEAR_CONFLICT" in rows[1]["warnings"]
+    assert {row["language"] for row in rows} == {"mr", "ml", "ta"}
+
+
+def test_recommendation_thresholds_cover_phase_2b_gates(tmp_path):
     low_coverage_dir = write_run_dir(
         tmp_path,
-        run_id="20260719T131737Z",
+        run_id="20260719T131735Z",
         movies=[movie_record("1", "Sairat"), movie_record("2", "Missing"), movie_record("3", "Missing Too")],
         wikidata_matches=[
             wikidata_record("1", qid="Q1", english_label="Sairat", native_label="सैराट", aliases=["Sairat"]),
@@ -514,8 +547,159 @@ def test_recommendation_thresholds_cover_warnings_manual_review_low_coverage_and
     )
     assert validate_regional_evidence_run(run_dir=low_coverage_dir)["final_recommendation"] == BLOCKED_BY_LOW_COVERAGE
 
-    blocked_dir = write_run_dir(tmp_path, run_id="20260719T131738Z", output_hash_overrides={"movies.jsonl": "bad-hash"})
-    assert validate_regional_evidence_run(run_dir=blocked_dir)["final_recommendation"] == BLOCKED_BY_DATA_INTEGRITY
+    pending_review_dir = write_run_dir(
+        tmp_path,
+        run_id="20260719T131736Z",
+        movies=[movie_record(str(index), f"Movie {index}", requested_language="mr") for index in range(1, 13)],
+        wikidata_matches=[
+            wikidata_record(str(index), qid=f"Q{index}", english_label=f"Movie {index}", native_label=f"Movie {index}", aliases=[f"Movie {index}"])
+            for index in range(1, 13)
+        ],
+        requested_languages=["mr"],
+    )
+    assert validate_regional_evidence_run(run_dir=pending_review_dir)["final_recommendation"] == MORE_MANUAL_REVIEW_REQUIRED
+
+    go_dir = write_run_dir(
+        tmp_path,
+        run_id="20260719T131737Z",
+        movies=[movie_record(str(index), f"Movie {index}", requested_language="mr") for index in range(1, 13)],
+        wikidata_matches=[
+            wikidata_record(str(index), qid=f"Q{index}", english_label=f"Movie {index}", native_label=f"Movie {index}", aliases=[f"Movie {index}"])
+            for index in range(1, 13)
+        ],
+        requested_languages=["mr"],
+    )
+    go_review = write_review_file(
+        tmp_path / "go-review.csv",
+        [
+            {
+                "tmdb_movie_id": str(index),
+                "wikidata_qid": f"Q{index}",
+                "language": "mr",
+                "tmdb_title": f"Movie {index}",
+                "tmdb_original_title": f"Movie {index}",
+                "wikidata_label": f"Movie {index}",
+                "wikidata_aliases": f"Movie {index}",
+                "tmdb_release_year": "2020",
+                "wikidata_release_year": "2020",
+                "director": "Director A",
+                "country": "India",
+                "validation_classification": VALIDATED_EXACT_MATCH,
+                "warnings": "",
+                "reviewer_decision": "CONFIRMED",
+                "reviewer_notes": "",
+            }
+            for index in range(1, 11)
+        ],
+    )
+    assert validate_regional_evidence_run(run_dir=go_dir, review_file=go_review)["final_recommendation"] == GO_FOR_COHORT_BASELINES
+
+    limited_scope_dir = write_run_dir(
+        tmp_path,
+        run_id="20260719T131738Z",
+        movies=[movie_record("1", "Sairat", requested_language="mr"), movie_record("2", "Minnal", requested_language="ml", original_language="ml")],
+        wikidata_matches=[
+            wikidata_record("1", qid="Q1", english_label="Sairat", native_label="सैराट", aliases=["Sairat"]),
+            wikidata_record("2", qid="Q2", english_label="Minnal", native_label="മിന്നൽ", native_language="ml", aliases=["Minnal"]),
+        ],
+        requested_languages=["mr", "ml"],
+    )
+    limited_review = write_review_file(
+        tmp_path / "limited-review.csv",
+        [
+            {
+                "tmdb_movie_id": "1",
+                "wikidata_qid": "Q1",
+                "language": "mr",
+                "tmdb_title": "Sairat",
+                "tmdb_original_title": "Sairat",
+                "wikidata_label": "Sairat",
+                "wikidata_aliases": "Sairat",
+                "tmdb_release_year": "2020",
+                "wikidata_release_year": "2020",
+                "director": "Director A",
+                "country": "India",
+                "validation_classification": VALIDATED_EXACT_MATCH,
+                "warnings": "",
+                "reviewer_decision": "CONFIRMED",
+                "reviewer_notes": "",
+            },
+            {
+                "tmdb_movie_id": "1",
+                "wikidata_qid": "Q1",
+                "language": "mr",
+                "tmdb_title": "Sairat",
+                "tmdb_original_title": "Sairat",
+                "wikidata_label": "Sairat",
+                "wikidata_aliases": "Sairat",
+                "tmdb_release_year": "2020",
+                "wikidata_release_year": "2020",
+                "director": "Director A",
+                "country": "India",
+                "validation_classification": VALIDATED_EXACT_MATCH,
+                "warnings": "",
+                "reviewer_decision": "CONFIRMED",
+                "reviewer_notes": "",
+            },
+            {
+                "tmdb_movie_id": "1",
+                "wikidata_qid": "Q1",
+                "language": "mr",
+                "tmdb_title": "Sairat",
+                "tmdb_original_title": "Sairat",
+                "wikidata_label": "Sairat",
+                "wikidata_aliases": "Sairat",
+                "tmdb_release_year": "2020",
+                "wikidata_release_year": "2020",
+                "director": "Director A",
+                "country": "India",
+                "validation_classification": VALIDATED_EXACT_MATCH,
+                "warnings": "",
+                "reviewer_decision": "CONFIRMED",
+                "reviewer_notes": "",
+            },
+        ],
+    )
+    assert validate_regional_evidence_run(
+        run_dir=limited_scope_dir,
+        review_file=limited_review,
+        thresholds=ValidationThresholds(minimum_reviewed_rows=5, minimum_language_reviewed_rows=3),
+    )["final_recommendation"] == GO_WITH_LIMITED_LANGUAGE_SCOPE
+
+    blocked_quality_dir = write_run_dir(
+        tmp_path,
+        run_id="20260719T131740Z",
+        movies=[movie_record(str(index), f"Movie {index}", requested_language="mr") for index in range(1, 13)],
+        wikidata_matches=[
+            wikidata_record(str(index), qid=f"Q{index}", english_label=f"Movie {index}", native_label=f"Movie {index}", aliases=[f"Movie {index}"])
+            for index in range(1, 13)
+        ],
+        requested_languages=["mr"],
+    )
+    blocked_quality_review = write_review_file(
+        tmp_path / "blocked-quality-review.csv",
+        [
+            {
+                "tmdb_movie_id": str(index),
+                "wikidata_qid": f"Q{index}",
+                "language": "mr",
+                "tmdb_title": f"Movie {index}",
+                "tmdb_original_title": f"Movie {index}",
+                "wikidata_label": f"Movie {index}",
+                "wikidata_aliases": f"Movie {index}",
+                "tmdb_release_year": "2020",
+                "wikidata_release_year": "2020",
+                "director": "Director A",
+                "country": "India",
+                "validation_classification": VALIDATED_EXACT_MATCH,
+                "warnings": "",
+                "reviewer_decision": "REJECTED" if index <= 2 else "CONFIRMED",
+                "reviewer_notes": "",
+            }
+            for index in range(1, 11)
+        ],
+    )
+    assert validate_regional_evidence_run(run_dir=blocked_quality_dir, review_file=blocked_quality_review)["final_recommendation"] == BLOCKED_BY_ENTITY_RESOLUTION_QUALITY
 
 
 def test_original_evidence_files_remain_unchanged_and_validator_stays_offline(tmp_path, monkeypatch):
@@ -538,7 +722,7 @@ def test_original_evidence_files_remain_unchanged_and_validator_stays_offline(tm
         for name in ("movies.jsonl", "wikidata_matches.jsonl", "coverage_summary.json", "run_manifest.json")
     }
     assert before == after
-    assert result["final_recommendation"] == GO_FOR_EXPANDED_SAMPLE
+    assert result["final_recommendation"] == MORE_MANUAL_REVIEW_REQUIRED
     assert "SessionLocal" not in source
     assert "get_db" not in source
     assert "compute_cine_score_v1" not in source
