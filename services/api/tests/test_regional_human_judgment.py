@@ -416,3 +416,280 @@ def test_reviewer_notes_roundtrip_and_safety(tmp_path):
         raise AssertionError("Expected ValueError for dangerous formula note")
     except ValueError as exc:
         assert "must be escaped with a leading apostrophe" in str(exc)
+
+
+def test_decimal_strict_parsing_and_handling():
+    from app.regional_human_judgment import parse_decimal_strict, parse_int_strict
+    from decimal import Decimal
+
+    # NaN / Infinity / -Infinity
+    for val in ("nan", "NaN", "NAN", "inf", "Infinity", "-inf", "-Infinity"):
+        try:
+            parse_decimal_strict(val)
+            raise AssertionError(f"Expected ValueError for NaN/Infinity: {val}")
+        except ValueError:
+            pass
+
+    # Scientific notation
+    for val in ("1e3", "1E-3", "2e0", "2.5e2"):
+        try:
+            parse_decimal_strict(val)
+            raise AssertionError(f"Expected ValueError for scientific notation: {val}")
+        except ValueError:
+            pass
+
+    # Comma-formatted
+    for val in ("2,008", "7,500.0", "123,456"):
+        try:
+            parse_decimal_strict(val)
+            raise AssertionError(f"Expected ValueError for commas: {val}")
+        except ValueError:
+            pass
+
+    # Boolean values
+    for val in ("True", "False", "true", "false", "TRUE", "FALSE"):
+        try:
+            parse_decimal_strict(val)
+            raise AssertionError(f"Expected ValueError for booleans: {val}")
+        except ValueError:
+            pass
+
+    # Whitespace/Signs inside
+    for val in ("- 2008", "+-2008", "--2008", "+ 2008"):
+        try:
+            parse_decimal_strict(val)
+            raise AssertionError(f"Expected ValueError for internal spaces/signs: {val}")
+        except ValueError:
+            pass
+
+    # Decimal Trailing Zeros
+    d1 = parse_decimal_strict("7.5000")
+    d2 = parse_decimal_strict("7.5")
+    assert d1 == d2
+    assert d1 == Decimal("7.5")
+
+    # Long decimal precision
+    d3 = parse_decimal_strict("0.12345678901234567890")
+    assert d3 == Decimal("0.12345678901234567890")
+
+    # Large integer precision
+    d4 = parse_int_strict("12345678901234567890")
+    assert d4 == 12345678901234567890
+
+    # Integer represented with trailing zeros
+    d5 = parse_int_strict("2008.000")
+    assert d5 == 2008
+
+    # 2008.5 is rejected as integer
+    try:
+        parse_int_strict("2008.5")
+        raise AssertionError("Expected ValueError for 2008.5 as integer")
+    except ValueError:
+        pass
+
+    # Negative zero behavior
+    d6 = parse_decimal_strict("-0")
+    d7 = parse_decimal_strict("0")
+    d8 = parse_decimal_strict("-0.00")
+    d9 = parse_decimal_strict("0.0")
+    assert d6 == d7
+    assert d8 == d9
+    assert d6 == d8
+    assert parse_int_strict("-0") == 0
+    assert parse_int_strict("-0.00") == 0
+
+
+def test_structured_warning_canonicalization_strict(tmp_path):
+    _run_dir, _shadow_dir, evaluation_dir = build_evaluation_fixture(tmp_path)
+    judgment_dir = tmp_path / "judgment"
+    build_regional_judgment_cases(evaluation_dir=evaluation_dir, output_dir=judgment_dir)
+    reviewed_csv = tmp_path / "reviewed.csv"
+    fill_review_csv(judgment_dir / "judgment_cases.csv", reviewed_csv)
+
+    def check_warnings(warnings_val, expected_err=""):
+        reviewed_csv_mod = tmp_path / "reviewed_mod_warn.csv"
+        with reviewed_csv.open("r", encoding="utf-8", newline="") as h:
+            reader = csv.DictReader(h)
+            rows = list(reader)
+            fieldnames = reader.fieldnames
+        rows[0]["evidence_warnings"] = warnings_val
+        with reviewed_csv_mod.open("w", encoding="utf-8", newline="") as h:
+            writer = csv.DictWriter(h, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        try:
+            import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv_mod, output_dir=tmp_path / "reviewed_out_warn")
+            return True
+        except ValueError as exc:
+            if expected_err:
+                assert expected_err in str(exc)
+            return False
+
+    with reviewed_csv.open("r", encoding="utf-8") as h:
+        orig_row = next(csv.DictReader(h))
+    orig_warnings = orig_row["evidence_warnings"]
+
+    # Duplicate warning tokens rejected
+    assert not check_warnings("WARN|WARN", "duplicate warning tokens detected")
+
+    # Blank warning tokens rejected
+    assert not check_warnings("WARN||OTHER", "blank warning token detected")
+    assert not check_warnings("|", "blank warning token detected")
+    assert not check_warnings("WARN|", "blank warning token detected")
+
+    # Changed casing rejected
+    assert not check_warnings("missing_aliases" if "MISSING_ALIASES" in orig_warnings else "MISSING_ALIASES".lower(), "immutable column mismatch")
+
+    # Whitespace inside warning identifiers rejected
+    assert not check_warnings("MISSING ALIASES", "whitespace inside warning identifiers detected")
+    assert not check_warnings("MISSING\tALIASES", "whitespace inside warning identifiers detected")
+
+
+def test_note_escaping_unambiguous(tmp_path):
+    _run_dir, _shadow_dir, evaluation_dir = build_evaluation_fixture(tmp_path)
+    judgment_dir = tmp_path / "judgment"
+    build_regional_judgment_cases(evaluation_dir=evaluation_dir, output_dir=judgment_dir)
+    reviewed_csv = tmp_path / "reviewed.csv"
+
+    with (judgment_dir / "judgment_cases.csv").open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        fieldnames = reader.fieldnames
+
+    rows[0]["reviewer_preference"] = "A_HIGHER"
+    rows[0]["reviewer_confidence"] = "HIGH"
+    rows[0]["reviewer_reason_code"] = "EXECUTION_AND_CRAFT"
+    # Literal apostrophe note that does NOT start with a formula prefix
+    rows[0]["reviewer_notes"] = "'This is a literal quote"
+
+    # Escaped note that starts with formula prefix but we do not repeatedly strip apostrophes
+    rows[1]["reviewer_preference"] = "B_HIGHER"
+    rows[1]["reviewer_confidence"] = "MEDIUM"
+    rows[1]["reviewer_reason_code"] = "CULTURAL_SIGNIFICANCE"
+    rows[1]["reviewer_notes"] = "''- Escaped twice"
+
+    for index in range(2, len(rows)):
+        rows[index]["reviewer_preference"] = "ROUGHLY_EQUAL"
+        rows[index]["reviewer_confidence"] = "MEDIUM"
+        rows[index]["reviewer_reason_code"] = "OTHER"
+        rows[index]["reviewer_notes"] = "Note"
+
+    with reviewed_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    result = import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "reviewed")
+    assert result["reviewed_count"] == len(rows)
+
+    imported_rows = []
+    with (tmp_path / "reviewed" / "reviewed_judgments.jsonl").open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                imported_rows.append(json.loads(line))
+
+    imported_by_id = {row["judgment_case_id"]: row for row in imported_rows}
+
+    # Assert literal quote note is not altered
+    assert imported_by_id[rows[0]["judgment_case_id"]]["reviewer_notes"] == "'This is a literal quote"
+    # Assert double escape removes only exactly one apostrophe
+    assert imported_by_id[rows[1]["judgment_case_id"]]["reviewer_notes"] == "'- Escaped twice"
+
+
+def test_complete_manual_smoke_verification_demonstration(tmp_path):
+    _run_dir, _shadow_dir, evaluation_dir = build_evaluation_fixture(tmp_path)
+    judgment_dir = tmp_path / "judgment"
+    build_regional_judgment_cases(evaluation_dir=evaluation_dir, output_dir=judgment_dir)
+    reviewed_csv = tmp_path / "reviewed.csv"
+    fill_review_csv(judgment_dir / "judgment_cases.csv", reviewed_csv)
+
+    def load_rows():
+        with reviewed_csv.open("r", encoding="utf-8", newline="") as h:
+            reader = csv.DictReader(h)
+            return list(reader), reader.fieldnames
+
+    def save_rows(rows, fieldnames):
+        with reviewed_csv.open("w", encoding="utf-8", newline="") as h:
+            writer = csv.DictWriter(h, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    clean_rows, fieldnames = load_rows()
+
+    # 1. 2008 to 2008.0 imports successfully
+    rows = [dict(r) for r in clean_rows]
+    orig_year = rows[0]["movie_a_release_year"]
+    rows[0]["movie_a_release_year"] = f"{orig_year}.0"
+    save_rows(rows, fieldnames)
+    import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_1")
+
+    # 2. 2008 to 2009 fails
+    rows = [dict(r) for r in clean_rows]
+    rows[0]["movie_a_release_year"] = "2009"
+    save_rows(rows, fieldnames)
+    try:
+        import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_2")
+        raise AssertionError("expected failure for year mismatch")
+    except ValueError as exc:
+        assert "immutable column mismatch" in str(exc)
+
+    # 3. 7.5 to 7.500 imports successfully
+    rows = [dict(r) for r in clean_rows]
+    orig_rating = rows[0]["movie_a_tmdb_rating"]
+    rows[0]["movie_a_tmdb_rating"] = f"{orig_rating}00"
+    save_rows(rows, fieldnames)
+    import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_3")
+
+    # 4. null to zero fails
+    from app.regional_human_judgment import _compare_immutable_field
+    try:
+        _compare_immutable_field("case_1", "movie_a_release_year", "0", "")
+        raise AssertionError("expected null to zero to fail")
+    except ValueError as exc:
+        assert "immutable column mismatch" in str(exc)
+
+    try:
+        _compare_immutable_field("case_1", "movie_a_release_year", "", "0")
+        raise AssertionError("expected zero to null to fail")
+    except ValueError as exc:
+        assert "immutable column mismatch" in str(exc)
+
+    # 5. dash-prefixed note round-trips
+    rows = [dict(r) for r in clean_rows]
+    rows[0]["reviewer_preference"] = "A_HIGHER"
+    rows[0]["reviewer_confidence"] = "HIGH"
+    rows[0]["reviewer_reason_code"] = "EXECUTION_AND_CRAFT"
+    rows[0]["reviewer_notes"] = "- Benign dash-prefixed note"
+    save_rows(rows, fieldnames)
+    import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_5")
+
+    # 6. formula-like unescaped note fails
+    rows = [dict(r) for r in clean_rows]
+    rows[0]["reviewer_notes"] = "=1+2"
+    save_rows(rows, fieldnames)
+    try:
+        import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_6")
+        raise AssertionError("expected unescaped formula to fail")
+    except ValueError as exc:
+        assert "must be escaped with a leading apostrophe" in str(exc)
+
+    # 7. safely escaped formula-like note imports as human-readable text
+    rows = [dict(r) for r in clean_rows]
+    rows[0]["reviewer_preference"] = "A_HIGHER"
+    rows[0]["reviewer_confidence"] = "HIGH"
+    rows[0]["reviewer_reason_code"] = "EXECUTION_AND_CRAFT"
+    rows[0]["reviewer_notes"] = "'=1+2"
+    save_rows(rows, fieldnames)
+    import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_7")
+    imported_rows = []
+    with (tmp_path / "out_7" / "reviewed_judgments.jsonl").open("r", encoding="utf-8") as h:
+        for line in h:
+            if line.strip():
+                imported_rows.append(json.loads(line))
+    assert imported_rows[0]["reviewer_notes"] == "=1+2"
+
+    # 8. repeated processing produces identical reviewed snapshot hashes
+    res_a = import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_8a")
+    res_b = import_reviewed_regional_judgments(judgment_dir=judgment_dir, reviewed_csv_path=reviewed_csv, output_dir=tmp_path / "out_8b")
+    assert res_a["output_hashes"]["reviewed_judgments.jsonl"] == res_b["output_hashes"]["reviewed_judgments.jsonl"]

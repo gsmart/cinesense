@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import csv
+import decimal
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import math
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -629,53 +632,46 @@ IMMUTABLE_FIELD_SCHEMA = {
 
 
 def _unescape_csv_cell(val: str) -> str:
-    if val.startswith("'") and len(val) > 1 and val[1] in FORMULA_PREFIXES:
+    if val.startswith("'") and len(val) > 1 and (val[1] in FORMULA_PREFIXES or val[1] == "'"):
         return val[1:]
     return val
 
 
-def parse_nullable_int(val: str) -> int | None:
+DECIMAL_REGEX = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
+
+
+def parse_decimal_strict(val: str) -> Decimal | None:
     val_stripped = val.strip()
     if not val_stripped:
         return None
-    if "," in val_stripped:
-        raise ValueError(f"Comma-formatted numbers are not allowed: {val!r}")
     if "e" in val_stripped.lower():
-        raise ValueError(f"Scientific notation is not allowed: {val!r}")
+        raise ValueError("Scientific notation is not allowed.")
+    if "," in val_stripped:
+        raise ValueError("Commas are not allowed.")
     if val_stripped.lower() in ("true", "false"):
-        raise ValueError(f"Boolean values are not allowed: {val!r}")
+        raise ValueError("Booleans are not allowed.")
+    if not DECIMAL_REGEX.match(val_stripped):
+        raise ValueError("Malformed number format.")
     try:
-        f = float(val_stripped)
-    except ValueError:
-        raise ValueError(f"Invalid integer: {val!r}")
-    if not math.isfinite(f):
-        raise ValueError(f"Infinite/NaN is not allowed: {val!r}")
-    if f != int(f):
-        raise ValueError(f"Not a valid integer: {val!r}")
-    return int(f)
+        d = Decimal(val_stripped)
+    except InvalidOperation:
+        raise ValueError("Invalid decimal number.")
+    if not d.is_finite():
+        raise ValueError("Infinite or NaN values are not allowed.")
+    return d
 
 
-def parse_nullable_decimal(val: str) -> float | None:
-    val_stripped = val.strip()
-    if not val_stripped:
+def parse_int_strict(val: str) -> int | None:
+    d = parse_decimal_strict(val)
+    if d is None:
         return None
-    if "," in val_stripped:
-        raise ValueError(f"Comma-formatted numbers are not allowed: {val!r}")
-    if "e" in val_stripped.lower():
-        raise ValueError(f"Scientific notation is not allowed: {val!r}")
-    if val_stripped.lower() in ("true", "false"):
-        raise ValueError(f"Boolean values are not allowed: {val!r}")
-    try:
-        f = float(val_stripped)
-    except ValueError:
-        raise ValueError(f"Invalid decimal: {val!r}")
-    if not math.isfinite(f):
-        raise ValueError(f"Infinite/NaN is not allowed: {val!r}")
-    return f
+    if d != d.to_integral_value():
+        raise ValueError("Value is not an integer.")
+    return int(d)
 
 
 def clean_reviewer_note(val: str) -> str:
-    if val.startswith("'") and len(val) > 1 and val[1] in FORMULA_PREFIXES:
+    if val.startswith("'") and len(val) > 1 and (val[1] in FORMULA_PREFIXES or val[1] == "'"):
         return val[1:]
     if val.startswith("=") or val.startswith("@"):
         raise ValueError("Formula-like notes must be escaped with a leading apostrophe.")
@@ -710,8 +706,8 @@ def _compare_immutable_field(case_id: str, key: str, value: str, expected: str) 
 
     elif field_type == "nullable_integer":
         try:
-            val_int = parse_nullable_int(val_unescaped)
-            exp_int = parse_nullable_int(exp_unescaped)
+            val_int = parse_int_strict(val_unescaped)
+            exp_int = parse_int_strict(exp_unescaped)
         except ValueError as exc:
             raise ValueError(f"immutable column mismatch for {case_id}: {key} (invalid integer format: {exc})")
         if val_int != exp_int:
@@ -719,22 +715,33 @@ def _compare_immutable_field(case_id: str, key: str, value: str, expected: str) 
 
     elif field_type == "nullable_decimal":
         try:
-            val_dec = parse_nullable_decimal(val_unescaped)
-            exp_dec = parse_nullable_decimal(exp_unescaped)
+            val_dec = parse_decimal_strict(val_unescaped)
+            exp_dec = parse_decimal_strict(exp_unescaped)
         except ValueError as exc:
             raise ValueError(f"immutable column mismatch for {case_id}: {key} (invalid decimal format: {exc})")
         if val_dec is None and exp_dec is None:
             pass
         elif val_dec is None or exp_dec is None:
             raise ValueError(f"immutable column mismatch for {case_id}: {key}")
-        elif not math.isclose(val_dec, exp_dec, abs_tol=1e-9):
+        elif val_dec != exp_dec:
             raise ValueError(f"immutable column mismatch for {case_id}: {key}")
 
     elif field_type == "structured_serialized_value":
-        w_val = sorted([w.strip() for w in val_unescaped.split("|") if w.strip()])
-        w_exp = sorted([w.strip() for w in exp_unescaped.split("|") if w.strip()])
-        if w_val != w_exp:
+        if not val_unescaped and not exp_unescaped:
+            pass
+        elif not val_unescaped or not exp_unescaped:
             raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+        else:
+            val_tokens = val_unescaped.split("|")
+            exp_tokens = exp_unescaped.split("|")
+            if any(not tok.strip() for tok in val_tokens):
+                raise ValueError(f"immutable column mismatch for {case_id}: {key} (blank warning token detected)")
+            if len(val_tokens) != len(set(val_tokens)):
+                raise ValueError(f"immutable column mismatch for {case_id}: {key} (duplicate warning tokens detected)")
+            if any(" " in tok or "\t" in tok or "\n" in tok or "\r" in tok for tok in val_tokens):
+                raise ValueError(f"immutable column mismatch for {case_id}: {key} (whitespace inside warning identifiers detected)")
+            if sorted(val_tokens) != sorted(exp_tokens):
+                raise ValueError(f"immutable column mismatch for {case_id}: {key}")
 
 
 def _validate_and_normalize_review_csv(*, generated_rows: list[dict[str, str]], reviewed_csv_path: Path) -> list[dict[str, Any]]:

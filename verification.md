@@ -4,7 +4,7 @@
 
 Verified on July 20, 2026 against the current workspace:
 
-- backend regression suite: `199 passed, 1 deselected`
+- backend regression suite: `203 passed, 1 deselected`
 - frontend production build: passed
 - frontend build warnings: existing Next.js `@next/next/no-img-element` warnings in `apps/web/components/discovery-form.tsx` and `apps/web/components/movie-card.tsx`
 
@@ -108,10 +108,12 @@ Human judgment workflow:
 - confirm `judgment_cases.csv` excludes v1/v2 ranks, scores, and rank deltas
 - confirm `judgment_case_mapping.jsonl` keeps the hidden scorer fields needed for offline evaluation
 - confirm `reviewed_judgments.jsonl` and `reviewed_judgment_summary.json` are written only after immutable-column validation passes
-- confirm type-aware comparison allows `.0` float integer conversions (e.g. `2008` to `2008.0`) and decimal precision tolerance (e.g. `7.5` and `7.500`)
+- confirm strict `decimal.Decimal` validation checks numbers: rejects scientific notation, commas, booleans, NaN/Infinity, internal whitespace/signs, and ensures year matches mathematically integral Decimal values.
+- confirm negative zero handling equated `-0` / `-0.00` to `0`
+- confirm structured warnings validation rejects duplicates, blank warning tokens, casing differences, additions/removals, internal spaces, and malformed delimiters
 - confirm duplicate columns in header or altered text fields cause import failure
 - confirm unescaped formula cells in editable fields fail import
-- confirm notes starting with a bullet dash `-` are accepted if benign
+- confirm notes starting with a bullet dash `-` are accepted if benign, and double escapes strip exactly one quote safety prefix
 - confirm `weight_evaluation_summary.json`, `weight_evaluation_cases.jsonl`, `language_weight_comparison.json`, `evaluation_recommendation.json`, and `evaluation_manifest.json` are deterministic for identical inputs
 
 ## Determinism And Negative Checks
