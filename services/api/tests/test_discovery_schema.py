@@ -54,6 +54,12 @@ def test_discovery_request_accepts_minimal_valid_narrowed_request() -> None:
     assert request.page_size == 20
 
 
+def test_discovery_request_normalizes_two_letter_original_language_to_lowercase() -> None:
+    request = DiscoveryRequest(original_language=" HI ")
+
+    assert request.original_language == "hi"
+
+
 def test_discovery_request_rejects_invalid_ranges() -> None:
     with pytest.raises(ValidationError):
         DiscoveryRequest(genres=["action"], release_year_min=2001, release_year_max=2000)
@@ -70,6 +76,9 @@ def test_discovery_request_rejects_unsupported_genres() -> None:
 def test_discovery_request_rejects_malformed_language_and_region_codes() -> None:
     with pytest.raises(ValidationError):
         DiscoveryRequest(genres=["action"], original_language="e1")
+
+    with pytest.raises(ValidationError):
+        DiscoveryRequest(genres=["action"], original_language="eng")
 
     with pytest.raises(ValidationError):
         DiscoveryRequest(genres=["action"], region="U1", availability_required=True)

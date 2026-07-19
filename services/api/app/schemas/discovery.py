@@ -79,8 +79,8 @@ class DiscoveryRequest(BaseModel):
         cleaned = value.strip().lower()
         if not cleaned:
             return None
-        if not cleaned.isascii() or not cleaned.isalpha() or len(cleaned) not in {2, 3}:
-            raise ValueError("original_language must be a 2-3 letter ISO-shaped code")
+        if not cleaned.isascii() or not cleaned.isalpha() or len(cleaned) != 2:
+            raise ValueError("original_language must be a 2-letter ISO-shaped code")
         return cleaned
 
     @field_validator("region")
