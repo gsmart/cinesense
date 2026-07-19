@@ -2,28 +2,31 @@
 
 Transparent, region-aware movie discovery with deterministic backend ranking and explicit data provenance.
 
-Current status: Phase 1A exact lookup and Phase 1B seed recommendations are complete as of July 18, 2026.
+Current status: exact lookup, seed recommendations, the public discovery API, and the manual `/discover` UI are implemented as of July 19, 2026. Direct browser verification of `/discover` still requires local user confirmation when the agent environment cannot launch Chrome.
 
 Implemented now:
 - monorepo layout with `apps/web` and `services/api`
 - FastAPI exact-title lookup endpoint at `POST /api/v1/lookup`
 - FastAPI seed recommendations endpoint at `POST /api/v1/recommendations`
+- FastAPI structured discovery endpoint at `POST /api/v1/discover`
 - PostgreSQL schema and Alembic migration for movies, aliases, external IDs, and observations
 - TMDB-backed provider adapter behind a backend-only token boundary
 - deterministic provisional `cine-score-v1`
-- Next.js UI for lookup, disambiguation, score breakdown, missing signals, provenance, freshness, and on-demand seed recommendations
+- Next.js UI for lookup, disambiguation, score breakdown, missing signals, provenance, freshness, on-demand seed recommendations, and manual structured discovery at `/discover`
 
 Verified now:
 - exact lookup, caching, scoring, and disambiguation work
 - seed recommendations work through API and UI
 - recommendations are capped at 20
 - ranking is deterministic with `cine-score-v1`
-- live API and UI verification passed
+- discovery API tests pass
+- `/discover` builds and serves locally
 
 Not implemented yet:
 - non-TMDB providers
 - authentication, payments, Redis, Celery, Kafka, Kubernetes, or LLM-authored ranking
-- Phase 2 work; scope must be planned and approved before implementation
+- free-text or LLM-driven discovery
+- streaming availability integration
 
 Documentation map:
 - `planning.md`: scope, phases, risks, status, open questions
@@ -63,9 +66,9 @@ Default startup command after implementation:
 
 What is built now:
 - A Phase 1 exact movie lookup and seed recommendation app.
-- The frontend supports exact lookup first, then on-demand similar-movie retrieval from a resolved seed.
+- The frontend supports exact lookup first, then on-demand similar-movie retrieval from a resolved seed, plus a dedicated `/discover` page for structured manual discovery filters.
 - The backend normalizes the request, checks PostgreSQL first, fetches from TMDB only when needed, persists canonical movies plus provenance/freshness, ranks recommendation candidates deterministically, and returns `cine-score-v1`.
-- The current success cases are one resolved movie detail card, explicit disambiguation for ambiguous titles such as `Crash`, and up to 20 ranked recommendations in the UI.
+- The current success cases are one resolved movie detail card, explicit disambiguation for ambiguous titles such as `Crash`, up to 20 ranked recommendations, and up to 20 ranked discovery results from structured filters.
 
 How to check frontend and backend as a user:
 1. Create `.env` from `.env.example` and set a real local `TMDB_API_READ_ACCESS_TOKEN`.
@@ -76,3 +79,9 @@ How to check frontend and backend as a user:
 6. Repeat the same search and confirm the app still works and reports cached/local reuse rather than behaving like a blank first fetch.
 7. Search for `Crash` and confirm the UI shows disambiguation choices instead of silently picking one movie.
 8. Confirm the TMDB token never appears in the page, browser network payloads, or API response body.
+9. Open `http://localhost:3000/discover`.
+10. Confirm the page shows navigation between `Exact Lookup` and `Discover Movies`.
+11. Confirm discovery exposes only structured filters: genres, original language, region, year bounds, runtime bounds, minimum evidence count, and page size.
+12. Confirm regional streaming availability is shown as disabled / coming later.
+13. Submit a narrowed filter set such as genres `Action` + `Drama`, release year min `1990`, page size `2`.
+14. Confirm ranked discovery results render with score, breakdown, missing signals, provenance, freshness, pagination, and poster fallback when needed.
