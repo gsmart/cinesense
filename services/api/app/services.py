@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+import json
 import logging
 from uuid import UUID
 
@@ -17,10 +18,12 @@ from app.adapters.tmdb import (
 )
 from app.core.config import get_settings
 from app.core.freshness import FreshnessState, FreshnessWindow, evaluate_freshness
+from app.interpreters import NaturalLanguageDiscoveryInterpreter
 from app.core.normalization import normalize_region, normalize_title
 from app.core.scoring import compute_cine_score_v1
 from app.models.movie import ExternalId, Movie, MovieAlias, Observation
 from app.schemas.discovery import DiscoveryRequest
+from app.schemas.natural_language import NaturalLanguageDiscoveryRequest
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -189,6 +192,58 @@ class LookupService:
             },
             "results": ranked,
         }
+
+    async def discover_from_natural_language(
+        self,
+        *,
+        request: NaturalLanguageDiscoveryRequest,
+        interpreter: NaturalLanguageDiscoveryInterpreter,
+    ) -> dict:
+        try:
+            untrusted = await interpreter.interpret(request)
+        except Exception:
+            return {
+                "status": "interpreter_failure",
+                "query": request.query,
+            }
+
+        if isinstance(untrusted, str):
+            try:
+                untrusted = json.loads(untrusted)
+            except json.JSONDecodeError:
+                return {
+                    "status": "invalid_interpretation",
+                    "query": request.query,
+                }
+
+        if not isinstance(untrusted, dict):
+            return {
+                "status": "invalid_interpretation",
+                "query": request.query,
+            }
+
+        candidate_payload = dict(untrusted)
+        candidate_payload["page"] = request.page
+        candidate_payload["page_size"] = request.page_size
+
+        try:
+            normalized_request = DiscoveryRequest.model_validate(candidate_payload)
+        except Exception as exc:
+            details = str(exc)
+            if "unrestricted discovery requests are not allowed" in details:
+                return {
+                    "status": "unrestricted_interpretation",
+                    "query": request.query,
+                }
+            return {
+                "status": "invalid_interpretation",
+                "query": request.query,
+            }
+
+        result = await self.discover_movies(request=normalized_request)
+        result["query"] = request.query
+        result["request"] = normalized_request.model_dump()
+        return result
 
     def persist_seed_recommendation_candidates(
         self,
