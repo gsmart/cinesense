@@ -12,5 +12,5 @@ Review against the current implemented platform, not the old Phase 1A-only scope
 - Persistence: canonical movies, aliases, external IDs, and observations must stay deduplicated
 - Security: no token leakage in logs, responses, manifests, or review files
 - Offline workflows: evidence validation, cohort baselines, and shadow scoring must not mutate production ranking state
-- Human judgment workflow: blinded reviewer CSVs must exclude anchoring scorer fields and reviewed imports must enforce immutable generated metadata
+- Human judgment workflow: blinded reviewer CSVs must exclude anchoring scorer fields and reviewed imports must enforce immutable generated metadata using type-aware validation schemas and reject duplicate columns and unescaped formula cells.
 - Tests: non-trivial logic leaves a runnable check behind

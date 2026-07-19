@@ -602,8 +602,158 @@ def _build_blinded_pair_row(*, case_id: str, case_type: str, left: dict[str, Any
     return blinded, mapping
 
 
+IMMUTABLE_FIELD_SCHEMA = {
+    "judgment_case_id": "exact_identifier",
+    "case_type": "exact_text",
+    "language": "exact_text",
+    "movie_a_tmdb_id": "exact_identifier",
+    "movie_b_tmdb_id": "exact_identifier",
+    "movie_a_title": "normalized_text",
+    "movie_b_title": "normalized_text",
+    "movie_a_release_year": "nullable_integer",
+    "movie_b_release_year": "nullable_integer",
+    "movie_a_primary_genre": "normalized_text",
+    "movie_b_primary_genre": "normalized_text",
+    "movie_a_tmdb_rating": "nullable_decimal",
+    "movie_b_tmdb_rating": "nullable_decimal",
+    "movie_a_vote_count": "exact_text",
+    "movie_b_vote_count": "exact_text",
+    "movie_a_popularity": "exact_text",
+    "movie_b_popularity": "exact_text",
+    "movie_a_cohort_level": "exact_text",
+    "movie_b_cohort_level": "exact_text",
+    "movie_a_identity_status": "exact_text",
+    "movie_b_identity_status": "exact_text",
+    "evidence_warnings": "structured_serialized_value",
+}
+
+
+def _unescape_csv_cell(val: str) -> str:
+    if val.startswith("'") and len(val) > 1 and val[1] in FORMULA_PREFIXES:
+        return val[1:]
+    return val
+
+
+def parse_nullable_int(val: str) -> int | None:
+    val_stripped = val.strip()
+    if not val_stripped:
+        return None
+    if "," in val_stripped:
+        raise ValueError(f"Comma-formatted numbers are not allowed: {val!r}")
+    if "e" in val_stripped.lower():
+        raise ValueError(f"Scientific notation is not allowed: {val!r}")
+    if val_stripped.lower() in ("true", "false"):
+        raise ValueError(f"Boolean values are not allowed: {val!r}")
+    try:
+        f = float(val_stripped)
+    except ValueError:
+        raise ValueError(f"Invalid integer: {val!r}")
+    if not math.isfinite(f):
+        raise ValueError(f"Infinite/NaN is not allowed: {val!r}")
+    if f != int(f):
+        raise ValueError(f"Not a valid integer: {val!r}")
+    return int(f)
+
+
+def parse_nullable_decimal(val: str) -> float | None:
+    val_stripped = val.strip()
+    if not val_stripped:
+        return None
+    if "," in val_stripped:
+        raise ValueError(f"Comma-formatted numbers are not allowed: {val!r}")
+    if "e" in val_stripped.lower():
+        raise ValueError(f"Scientific notation is not allowed: {val!r}")
+    if val_stripped.lower() in ("true", "false"):
+        raise ValueError(f"Boolean values are not allowed: {val!r}")
+    try:
+        f = float(val_stripped)
+    except ValueError:
+        raise ValueError(f"Invalid decimal: {val!r}")
+    if not math.isfinite(f):
+        raise ValueError(f"Infinite/NaN is not allowed: {val!r}")
+    return f
+
+
+def clean_reviewer_note(val: str) -> str:
+    if val.startswith("'") and len(val) > 1 and val[1] in FORMULA_PREFIXES:
+        return val[1:]
+    if val.startswith("=") or val.startswith("@"):
+        raise ValueError("Formula-like notes must be escaped with a leading apostrophe.")
+    if val.startswith("+") or val.startswith("-"):
+        remaining = val[1:].lstrip()
+        if not remaining:
+            return val
+        if remaining[0].isdigit() or remaining[0] in ("(", "$", "=", "+", "-", "@"):
+            raise ValueError("Formula-like notes must be escaped with a leading apostrophe.")
+    return val
+
+
+def _compare_immutable_field(case_id: str, key: str, value: str, expected: str) -> None:
+    field_type = IMMUTABLE_FIELD_SCHEMA.get(key)
+    if not field_type:
+        return
+
+    val_unescaped = _unescape_csv_cell(value)
+    exp_unescaped = _unescape_csv_cell(expected)
+
+    if field_type == "exact_identifier":
+        if val_unescaped != exp_unescaped:
+            raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+
+    elif field_type == "exact_text":
+        if val_unescaped != exp_unescaped:
+            raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+
+    elif field_type == "normalized_text":
+        if val_unescaped.strip() != exp_unescaped.strip():
+            raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+
+    elif field_type == "nullable_integer":
+        try:
+            val_int = parse_nullable_int(val_unescaped)
+            exp_int = parse_nullable_int(exp_unescaped)
+        except ValueError as exc:
+            raise ValueError(f"immutable column mismatch for {case_id}: {key} (invalid integer format: {exc})")
+        if val_int != exp_int:
+            raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+
+    elif field_type == "nullable_decimal":
+        try:
+            val_dec = parse_nullable_decimal(val_unescaped)
+            exp_dec = parse_nullable_decimal(exp_unescaped)
+        except ValueError as exc:
+            raise ValueError(f"immutable column mismatch for {case_id}: {key} (invalid decimal format: {exc})")
+        if val_dec is None and exp_dec is None:
+            pass
+        elif val_dec is None or exp_dec is None:
+            raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+        elif not math.isclose(val_dec, exp_dec, abs_tol=1e-9):
+            raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+
+    elif field_type == "structured_serialized_value":
+        w_val = sorted([w.strip() for w in val_unescaped.split("|") if w.strip()])
+        w_exp = sorted([w.strip() for w in exp_unescaped.split("|") if w.strip()])
+        if w_val != w_exp:
+            raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+
+
 def _validate_and_normalize_review_csv(*, generated_rows: list[dict[str, str]], reviewed_csv_path: Path) -> list[dict[str, Any]]:
     generated_by_id = {row["judgment_case_id"]: row for row in generated_rows}
+
+    # Pre-parse duplicate column header check
+    with reviewed_csv_path.open("r", encoding="utf-8") as raw_handle:
+        raw_reader = csv.reader(raw_handle)
+        header = next(raw_reader, None)
+        if not header:
+            raise ValueError("reviewed CSV is empty or missing a header row")
+        seen_cols = set()
+        for col in header:
+            if not col:
+                continue
+            if col in seen_cols:
+                raise ValueError(f"duplicate column detected in CSV header: {col}")
+            seen_cols.add(col)
+
     with reviewed_csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
@@ -625,8 +775,7 @@ def _validate_and_normalize_review_csv(*, generated_rows: list[dict[str, str]], 
                 value = str(row.get(key) or "")
                 if key in REVIEWER_EDITABLE_COLUMNS:
                     continue
-                if value != expected:
-                    raise ValueError(f"immutable column mismatch for {case_id}: {key}")
+                _compare_immutable_field(case_id, key, value, expected)
             preference = str(row.get("reviewer_preference") or "").strip()
             confidence = str(row.get("reviewer_confidence") or "").strip()
             reason_code = str(row.get("reviewer_reason_code") or "").strip()
@@ -637,11 +786,16 @@ def _validate_and_normalize_review_csv(*, generated_rows: list[dict[str, str]], 
                 raise ValueError(f"invalid reviewer_confidence for {case_id}: {confidence}")
             if reason_code not in REVIEWER_REASON_CODES:
                 raise ValueError(f"invalid reviewer_reason_code for {case_id}: {reason_code}")
+
+            try:
+                cleaned_notes = clean_reviewer_note(notes)
+            except ValueError as exc:
+                raise ValueError(f"formula-like content rejected for {case_id}: reviewer_notes (reason: {exc})")
+
             for editable_key, editable_value in {
                 "reviewer_preference": preference,
                 "reviewer_confidence": confidence,
                 "reviewer_reason_code": reason_code,
-                "reviewer_notes": notes,
             }.items():
                 if _is_formula_like(editable_value):
                     raise ValueError(f"formula-like content rejected for {case_id}: {editable_key}")
@@ -655,7 +809,7 @@ def _validate_and_normalize_review_csv(*, generated_rows: list[dict[str, str]], 
                     "reviewer_preference": preference,
                     "reviewer_confidence": confidence,
                     "reviewer_reason_code": reason_code,
-                    "reviewer_notes": notes,
+                    "reviewer_notes": cleaned_notes,
                 }
             )
     expected_ids = sorted(generated_by_id)

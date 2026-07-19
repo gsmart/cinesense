@@ -40,6 +40,7 @@ These artifacts should be treated as internal engineering data. They are not pro
 - validation should remain deterministic even when review input is absent or incomplete
 - reviewer-facing CSV exports must avoid spreadsheet-formula injection in editable cells
 - reviewed imports must reject immutable-column tampering and formula-like reviewer input
+- **Spreadsheet Formula Safety**: Reviewer notes starting with `=, +, -, or @` must be escaped using a leading apostrophe `'`. The importer automatically unescapes these notes by stripping the leading apostrophe, protecting Excel/Sheets from executing formulas. Unescaped formula blocks are rejected to prevent CSV-injection vectors. Benign dash-prefixed text notes are accepted directly.
 
 ## Commercial Launch Gates
 
