@@ -8,12 +8,19 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.adapters.tmdb import TmdbAdapter, TmdbCandidate, TmdbMovieBundle, summarize_tmdb_http_error
+from app.adapters.tmdb import (
+    TmdbAdapter,
+    TmdbCandidate,
+    TmdbMovieBundle,
+    UnsupportedTmdbDiscoverFilterError,
+    summarize_tmdb_http_error,
+)
 from app.core.config import get_settings
 from app.core.freshness import FreshnessState, FreshnessWindow, evaluate_freshness
 from app.core.normalization import normalize_region, normalize_title
 from app.core.scoring import compute_cine_score_v1
 from app.models.movie import ExternalId, Movie, MovieAlias, Observation
+from app.schemas.discovery import DiscoveryRequest
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -145,11 +152,79 @@ class LookupService:
             },
         }
 
+    async def discover_movies(self, *, request: DiscoveryRequest) -> dict:
+        try:
+            candidates = await self.tmdb.discover_movies(request)
+        except UnsupportedTmdbDiscoverFilterError:
+            return {
+                "status": "unsupported_filter",
+                "unsupported_filter": "availability_required",
+                "page": {
+                    "page": request.page,
+                    "requested_page_size": request.page_size,
+                    "returned_count": 0,
+                    "max_page_size": 20,
+                },
+                "results": [],
+            }
+        except httpx.HTTPError as exc:
+            self._log_tmdb_failure(
+                "discover_movies",
+                exc,
+                page=request.page,
+                page_size=request.page_size,
+                region=request.region,
+            )
+            raise RuntimeError("TMDB request failed") from exc
+
+        persisted = self.persist_discovery_candidates(candidates=candidates)
+        ranked = self.rank_discovery_candidates(persisted)[: request.page_size]
+        return {
+            "status": "ok",
+            "page": {
+                "page": request.page,
+                "requested_page_size": request.page_size,
+                "returned_count": len(ranked),
+                "max_page_size": 20,
+            },
+            "results": ranked,
+        }
+
     def persist_seed_recommendation_candidates(
         self,
         *,
         seed_source_movie_id: str,
         candidates: list[TmdbCandidate],
+    ) -> list[Movie]:
+        return self._persist_tmdb_candidates(
+            candidates=candidates,
+            excluded_source_ids={seed_source_movie_id},
+        )
+
+    def persist_discovery_candidates(
+        self,
+        *,
+        candidates: list[TmdbCandidate],
+    ) -> list[Movie]:
+        return self._persist_tmdb_candidates(candidates=candidates, excluded_source_ids=set())
+
+    def rank_seed_recommendation_candidates(self, movies: list[Movie]) -> list[dict]:
+        return self._rank_tmdb_candidates(
+            movies,
+            match_value_for_position=lambda position: (20 - position) / 20.0,
+        )
+
+    def rank_discovery_candidates(self, movies: list[Movie]) -> list[dict]:
+        return self._rank_tmdb_candidates(
+            movies,
+            match_value_for_position=lambda _position: 1.0,
+        )
+
+    def _persist_tmdb_candidates(
+        self,
+        *,
+        candidates: list[TmdbCandidate],
+        excluded_source_ids: set[str],
     ) -> list[Movie]:
         if not candidates:
             return []
@@ -161,13 +236,13 @@ class LookupService:
                 break
             if candidate.media_type != "movie":
                 continue
-            if candidate.source_movie_id == seed_source_movie_id or candidate.source_movie_id in seen_source_ids:
+            if candidate.source_movie_id in excluded_source_ids or candidate.source_movie_id in seen_source_ids:
                 continue
             seen_source_ids.add(candidate.source_movie_id)
             persisted.append(self._upsert_tmdb_recommendation_candidate(candidate))
         return persisted
 
-    def rank_seed_recommendation_candidates(self, movies: list[Movie]) -> list[dict]:
+    def _rank_tmdb_candidates(self, movies: list[Movie], *, match_value_for_position) -> list[dict]:
         if not movies:
             return []
 
@@ -201,7 +276,7 @@ class LookupService:
                 vote_count=audience.evidence_count if audience else None,
                 popularity=float(popularity.numeric_value) if popularity and popularity.numeric_value is not None else None,
                 missing_signals=missing_signals,
-                seed_relevance=(20 - position) / 20.0,
+                seed_relevance=match_value_for_position(position),
             )
             ranked.append(
                 {

@@ -3,8 +3,9 @@ import hashlib
 
 import httpx
 
-from app.adapters.tmdb import TmdbAdapter
+from app.adapters.tmdb import TmdbAdapter, UnsupportedTmdbDiscoverFilterError
 from app.core.config import Settings
+from app.schemas.discovery import DiscoveryRequest
 
 
 def make_settings(*, token: str = "test-token") -> Settings:
@@ -263,3 +264,187 @@ def test_get_seed_recommendations_propagates_safe_http_status_failure(monkeypatc
         assert "super-secret-token" not in str(exc)
     else:
         raise AssertionError("expected HTTPStatusError")
+
+
+def test_discover_movies_maps_every_phase_2a_field_correctly(monkeypatch):
+    seen: dict[str, object] = {}
+
+    async def fake_get_json(path, *, params=None):
+        seen["path"] = path
+        seen["params"] = params
+        return {
+            "results": [
+                {
+                    "id": 101,
+                    "title": "Heat 2",
+                    "original_language": "en",
+                    "release_date": "2027-12-01",
+                    "popularity": 44.5,
+                    "vote_average": 8.3,
+                    "vote_count": 1200,
+                    "overview": "x",
+                    "poster_path": "/heat2.jpg",
+                }
+            ]
+        }
+
+    adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json", fake_get_json)
+
+    request = DiscoveryRequest(
+        genres=[" comedy ", "Action"],
+        original_language=" EN ",
+        region=" us ",
+        release_year_min=1990,
+        release_year_max=1999,
+        runtime_minutes_min=90,
+        runtime_minutes_max=120,
+        minimum_evidence_count=10,
+        page=3,
+        page_size=2,
+    )
+    candidates = asyncio.run(adapter.discover_movies(request))
+
+    assert seen["path"] == "/discover/movie"
+    assert seen["params"] == {
+        "include_adult": "false",
+        "sort_by": "popularity.desc",
+        "page": "3",
+        "with_genres": "28,35",
+        "with_original_language": "en",
+        "region": "US",
+        "primary_release_date.gte": "1990-01-01",
+        "primary_release_date.lte": "1999-12-31",
+        "with_runtime.gte": "90",
+        "with_runtime.lte": "120",
+        "vote_count.gte": "10",
+    }
+    assert len(candidates) == 1
+    assert candidates[0].provider_position == 0
+
+
+def test_discover_movies_respects_page_size_and_never_returns_more_than_twenty(monkeypatch):
+    payload = {
+        "results": [
+            {"id": index, "title": f"Movie {index}", "release_date": "2026-01-01", "original_language": "en"}
+            for index in range(1, 26)
+        ]
+    }
+
+    async def fake_get_json(path, *, params=None):
+        return payload
+
+    adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json", fake_get_json)
+
+    small_page = asyncio.run(adapter.discover_movies(DiscoveryRequest(genres=["action"], page_size=2)))
+    full_page = asyncio.run(adapter.discover_movies(DiscoveryRequest(genres=["action"], page_size=20)))
+
+    assert len(small_page) == 2
+    assert len(full_page) == 20
+
+
+def test_discover_movies_normalizes_output_safely(monkeypatch):
+    async def fake_get_json(path, *, params=None):
+        return {
+            "results": [
+                {
+                    "id": 101,
+                    "original_title": "Heat 2",
+                    "original_language": 7,
+                    "release_date": "bad-date",
+                    "popularity": "nope",
+                    "vote_average": "8.3",
+                    "vote_count": 12.5,
+                    "overview": {"bad": "shape"},
+                    "poster_path": False,
+                }
+            ]
+        }
+
+    adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json", fake_get_json)
+
+    candidate = asyncio.run(adapter.discover_movies(DiscoveryRequest(genres=["action"])))[0]
+
+    assert candidate.title == "Heat 2"
+    assert candidate.release_year is None
+    assert candidate.original_language is None
+    assert candidate.popularity is None
+    assert candidate.vote_average is None
+    assert candidate.vote_count is None
+    assert candidate.rating_scale is None
+    assert candidate.overview is None
+    assert candidate.poster_path is None
+
+
+def test_discover_movies_deduplicates_duplicate_tmdb_ids(monkeypatch):
+    async def fake_get_json(path, *, params=None):
+        return {
+            "results": [
+                {"id": 77, "title": "Memento", "release_date": "2000-10-11", "original_language": "en"},
+                {"id": 77, "title": "Memento", "release_date": "2000-10-11", "original_language": "en"},
+                {"id": 603, "title": "The Matrix", "release_date": "1999-03-31", "original_language": "en"},
+            ]
+        }
+
+    adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[1]}'
+    monkeypatch.setattr(adapter, "_get_json", fake_get_json)
+    candidates = asyncio.run(adapter.discover_movies(DiscoveryRequest(genres=["action"])))
+
+    assert [candidate.source_movie_id for candidate in candidates] == ["77", "603"]
+
+
+def test_discover_movies_returns_empty_list_for_empty_results(monkeypatch):
+    async def fake_get_json(path, *, params=None):
+        return {"results": []}
+
+    adapter = TmdbAdapter(make_settings())
+    adapter._last_response_content = b'{"results":[]}'
+    monkeypatch.setattr(adapter, "_get_json", fake_get_json)
+
+    assert asyncio.run(adapter.discover_movies(DiscoveryRequest(genres=["action"]))) == []
+
+
+def test_discover_movies_rejects_availability_required_before_provider_access(monkeypatch):
+    called = False
+
+    async def fake_get_json(path, *, params=None):
+        nonlocal called
+        called = True
+        return {"results": []}
+
+    adapter = TmdbAdapter(make_settings())
+    monkeypatch.setattr(adapter, "_get_json", fake_get_json)
+
+    try:
+        asyncio.run(
+            adapter.discover_movies(
+                DiscoveryRequest(genres=["action"], availability_required=True, region="US")
+            )
+        )
+    except UnsupportedTmdbDiscoverFilterError:
+        pass
+    else:
+        raise AssertionError("expected UnsupportedTmdbDiscoverFilterError")
+
+    assert called is False
+
+
+def test_discover_movies_propagates_safe_provider_failure(monkeypatch):
+    async def fake_get_json(path, *, params=None):
+        raise httpx.ConnectError("connection failed")
+
+    adapter = TmdbAdapter(make_settings(token="super-secret-token"))
+    monkeypatch.setattr(adapter, "_get_json", fake_get_json)
+
+    try:
+        asyncio.run(adapter.discover_movies(DiscoveryRequest(genres=["action"])))
+    except httpx.ConnectError as exc:
+        assert "super-secret-token" not in str(exc)
+    else:
+        raise AssertionError("expected ConnectError")

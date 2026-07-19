@@ -16,6 +16,7 @@ import httpx
 
 from app.core.config import Settings
 from app.core.normalization import normalize_title
+from app.schemas.discovery import DiscoveryRequest
 
 
 def summarize_tmdb_http_error(exc: httpx.HTTPError) -> tuple[str, str]:
@@ -62,6 +63,7 @@ class TmdbCandidate:
     fetch_status: str = "SUCCESS"
     parser_version: str = "tmdb-v1"
     raw_response_hash: str | None = None
+    provider_position: int = 0
 
 
 @dataclass(slots=True)
@@ -77,6 +79,33 @@ class TmdbMovieBundle:
     poster_url: str | None
     aliases: list[str]
     observations: list[dict[str, Any]]
+
+
+class UnsupportedTmdbDiscoverFilterError(ValueError):
+    pass
+
+
+TMDB_DISCOVER_GENRE_IDS = {
+    "action": "28",
+    "adventure": "12",
+    "animation": "16",
+    "comedy": "35",
+    "crime": "80",
+    "documentary": "99",
+    "drama": "18",
+    "family": "10751",
+    "fantasy": "14",
+    "history": "36",
+    "horror": "27",
+    "music": "10402",
+    "mystery": "9648",
+    "romance": "10749",
+    "science-fiction": "878",
+    "thriller": "53",
+    "tv-movie": "10770",
+    "war": "10752",
+    "western": "37",
+}
 
 
 class TmdbAdapter:
@@ -226,6 +255,21 @@ class TmdbAdapter:
             return None
         return value
 
+    def _normalize_popularity(self, value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        return float(value)
+
+    def _normalize_optional_text(self, value: Any) -> str | None:
+        if isinstance(value, str):
+            return value
+        return None
+
+    def _release_year_from_date(self, value: Any) -> int | None:
+        if not isinstance(value, str):
+            return None
+        return int(value[:4]) if len(value) >= 4 and value[:4].isdigit() else None
+
     async def search_titles(self, query: str, year: int | None, media_type: str) -> list[TmdbCandidate]:
         if media_type != "movie":
             return []
@@ -246,13 +290,81 @@ class TmdbAdapter:
                     title=title,
                     normalized_title=normalize_title(title),
                     release_year=release_year,
-                    original_language=result.get("original_language"),
-                    popularity=result.get("popularity"),
+                    original_language=self._normalize_optional_text(result.get("original_language")),
+                    popularity=self._normalize_popularity(result.get("popularity")),
                     vote_average=self._normalize_vote_average(result.get("vote_average")),
                     vote_count=self._normalize_vote_count(result.get("vote_count")),
                     rating_scale="0-10" if self._normalize_vote_average(result.get("vote_average")) is not None else None,
                 )
             )
+        return candidates
+
+    async def discover_movies(self, request: DiscoveryRequest) -> list[TmdbCandidate]:
+        if request.availability_required:
+            raise UnsupportedTmdbDiscoverFilterError("availability_required is not supported by TMDB discovery yet")
+
+        params: dict[str, str] = {
+            "include_adult": "false",
+            "sort_by": "popularity.desc",
+            "page": str(request.page),
+        }
+        if request.genres:
+            params["with_genres"] = ",".join(TMDB_DISCOVER_GENRE_IDS[genre] for genre in request.genres)
+        if request.original_language:
+            params["with_original_language"] = request.original_language
+        if request.region:
+            params["region"] = request.region
+        if request.release_year_min is not None:
+            params["primary_release_date.gte"] = f"{request.release_year_min}-01-01"
+        if request.release_year_max is not None:
+            params["primary_release_date.lte"] = f"{request.release_year_max}-12-31"
+        if request.runtime_minutes_min is not None:
+            params["with_runtime.gte"] = str(request.runtime_minutes_min)
+        if request.runtime_minutes_max is not None:
+            params["with_runtime.lte"] = str(request.runtime_minutes_max)
+        if request.minimum_evidence_count > 0:
+            params["vote_count.gte"] = str(request.minimum_evidence_count)
+
+        payload = await self._get_json("/discover/movie", params=params)
+        fetched_at = datetime.now(UTC)
+        raw_hash = hashlib.sha256(self._last_response_content).hexdigest()
+        capped_limit = min(request.page_size, 20)
+        seen_ids: set[str] = set()
+        candidates: list[TmdbCandidate] = []
+        for result in payload.get("results", []):
+            candidate_id = str(result.get("id") or "")
+            if not candidate_id or candidate_id in seen_ids:
+                continue
+            title = self._normalize_optional_text(result.get("title")) or self._normalize_optional_text(
+                result.get("original_title")
+            )
+            if not title:
+                continue
+            vote_average = self._normalize_vote_average(result.get("vote_average"))
+            seen_ids.add(candidate_id)
+            candidates.append(
+                TmdbCandidate(
+                    source_movie_id=candidate_id,
+                    title=title,
+                    normalized_title=normalize_title(title),
+                    release_year=self._release_year_from_date(result.get("release_date")),
+                    original_language=self._normalize_optional_text(result.get("original_language")),
+                    popularity=self._normalize_popularity(result.get("popularity")),
+                    vote_average=vote_average,
+                    vote_count=self._normalize_vote_count(result.get("vote_count")),
+                    rating_scale="0-10" if vote_average is not None else None,
+                    overview=self._normalize_optional_text(result.get("overview")),
+                    poster_path=self._normalize_optional_text(result.get("poster_path")),
+                    source_url=f"https://www.themoviedb.org/movie/{candidate_id}",
+                    fetched_at=fetched_at,
+                    fetch_status="SUCCESS",
+                    parser_version="tmdb-v1",
+                    raw_response_hash=raw_hash,
+                    provider_position=len(candidates),
+                )
+            )
+            if len(candidates) >= capped_limit:
+                break
         return candidates
 
     async def get_seed_recommendations(
@@ -302,18 +414,19 @@ class TmdbAdapter:
                     normalized_title=normalize_title(title),
                     release_year=release_year,
                     media_type="movie",
-                    original_language=result.get("original_language"),
-                    popularity=result.get("popularity"),
+                    original_language=self._normalize_optional_text(result.get("original_language")),
+                    popularity=self._normalize_popularity(result.get("popularity")),
                     vote_average=vote_average,
                     vote_count=vote_count,
                     rating_scale="0-10" if vote_average is not None else None,
-                    overview=result.get("overview"),
-                    poster_path=result.get("poster_path"),
+                    overview=self._normalize_optional_text(result.get("overview")),
+                    poster_path=self._normalize_optional_text(result.get("poster_path")),
                     source_url=f"https://www.themoviedb.org/movie/{candidate_id}",
                     fetched_at=fetched_at,
                     fetch_status="SUCCESS",
                     parser_version="tmdb-v1",
                     raw_response_hash=raw_hash,
+                    provider_position=len(candidates),
                 )
             )
             if len(candidates) >= capped_limit:
