@@ -122,3 +122,45 @@ class DiscoveryRequest(BaseModel):
             raise ValueError("unrestricted discovery requests are not allowed")
 
         return self
+
+
+class DiscoveryMovieResponse(BaseModel):
+    movie_id: str
+    canonical_title: str
+    release_year: int | None
+    media_type: str
+    original_language: str | None = None
+    overview: str | None = None
+    poster_url: str | None = None
+
+
+class DiscoveryProvenanceResponse(BaseModel):
+    source: str
+    source_movie_id: str
+    source_url: str | None
+
+
+class DiscoveryResultResponse(BaseModel):
+    movie: DiscoveryMovieResponse
+    tmdb_source_movie_id: str
+    provider_position: int
+    score: float
+    score_version: str
+    score_components: dict[str, float | None]
+    missing_signals: list[str]
+    provenance: DiscoveryProvenanceResponse
+    freshness: dict[str, str]
+
+
+class DiscoveryPageMetadata(BaseModel):
+    page: int
+    requested_page_size: int
+    returned_count: int
+    max_page_size: Literal[20] = 20
+
+
+class DiscoveryResponse(BaseModel):
+    status: Literal["ok"]
+    request: DiscoveryRequest
+    results: list[DiscoveryResultResponse]
+    page: DiscoveryPageMetadata

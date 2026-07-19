@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.adapters.tmdb import TmdbAdapter
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.schemas.discovery import DiscoveryRequest, DiscoveryResponse
 from app.schemas.lookup import LookupRequest, LookupResponse
 from app.schemas.recommendations import RecommendationsRequest, RecommendationsResponse
 from app.services import LookupService
@@ -53,3 +54,27 @@ async def recommend_movies(payload: RecommendationsRequest, db: Session = Depend
             "max_page_size": 20,
         }
     return RecommendationsResponse.model_validate(result)
+
+
+@router.post("/discover", response_model=DiscoveryResponse)
+async def discover_movies(payload: DiscoveryRequest, db: Session = Depends(get_db)) -> DiscoveryResponse:
+    service = LookupService(db, TmdbAdapter(get_settings()))
+    try:
+        result = await service.discover_movies(request=payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if result["status"] == "unsupported_filter":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "unsupported_filter",
+                "filter": result.get("unsupported_filter", "availability_required"),
+            },
+        )
+
+    result["results"] = result.get("results", [])[:20]
+    if "page" in result:
+        result["page"]["returned_count"] = min(result["page"].get("returned_count", len(result["results"])), len(result["results"]))
+    result["request"] = payload.model_dump()
+    return DiscoveryResponse.model_validate(result)
