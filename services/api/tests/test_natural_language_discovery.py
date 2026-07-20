@@ -116,6 +116,7 @@ def test_valid_interpretation_succeeds_and_preserves_backend_order_without_recal
         "availability_required": False,
         "page": 1,
         "page_size": 20,
+        "include_shadow": False,
     }
     assert len(calls) == 1
     assert calls[0].genres == ["thriller"]
@@ -269,3 +270,36 @@ def test_repeated_valid_inputs_with_identical_interpreter_output_are_determinist
     )
 
     assert first == second
+
+
+def test_natural_language_discovery_region_propagation(monkeypatch):
+    service = make_service()
+    calls = []
+
+    async def fake_discover(*, request):
+        calls.append(request)
+        return {
+            "status": "ok",
+            "results": [],
+            "page": {"page": 1, "requested_page_size": 20, "returned_count": 0, "max_page_size": 20},
+        }
+
+    monkeypatch.setattr(service, "discover_movies", fake_discover)
+    interpreter_payload = {"genres": ["thriller"]}
+
+    # Try region propagation
+    result = asyncio.run(
+        service.discover_from_natural_language(
+            request=make_input(region="IN"),
+            interpreter=FakeInterpreter(interpreter_payload),
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert len(calls) == 1
+    assert calls[0].region == "IN"
+
+    # Verify schema validation on invalid region
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        NaturalLanguageDiscoveryRequest(query="test", region="INVALID")

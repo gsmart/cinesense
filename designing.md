@@ -68,7 +68,13 @@ Production ranking remains backend-owned and deterministic:
 - active production version is `cine-score-v1`
 - public API payloads still expose the applied score as `score`, `score_version`, `score_components`, and `missing_signals`
 
-`cine-score-v2` currently exists only as an offline shadow prototype. It does not change lookup, recommendation, discovery, or natural-language discovery ordering in user-facing responses.
+### Local Shadow Diagnostics
+For local development, client requests can submit `include_shadow: bool = False`. If this flag is `true`, and local shadow diagnostics are enabled:
+- The backend performs shadow comparison against the current `cine-score-v2-shadow-1` baseline artifacts.
+- The returned movie objects include a `shadow_comparison: ShadowComparisonResponse` block.
+- `ShadowComparisonResponse` fields: `authoritative` (always `false`), `shadow_only` (always `true`), `v1_score`, `v2_score`, `v1_rank`, `v2_rank`, `rank_movement`, `score_delta`, `score_version`, `evidence_gate`, `review_status` (defaults to `"PENDING"`), `activation_eligible` (defaults to `false`), `ineligible_reason`, and `warnings`.
+- If `include_shadow: true` is requested when diagnostics are disabled, the server returns a `403 Forbidden` error.
+- **Strict Invariance**: Under no circumstances does the shadow score or rank alter the top-level result order or pagination; sorting is strictly preserved according to `cine-score-v1`.
 
 ## Regional Evidence Pipeline
 

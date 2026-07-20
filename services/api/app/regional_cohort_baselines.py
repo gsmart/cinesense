@@ -347,6 +347,99 @@ def build_cohort_key(*, level: str, language: str, era: str, primary_genre: str)
     return GLOBAL_COHORT_KEY
 
 
+@dataclass(frozen=True)
+class RuntimeCohortAssignment:
+    requested_cohort_key: str | None
+    selected_cohort_key: str | None
+    selected_cohort_level: str
+    normalized_language: str | None
+    normalized_era: str | None
+    normalized_genre: str | None
+    fallback_reason: str | None
+    failure_reason: str | None = None
+
+
+def assign_runtime_cohort(
+    *,
+    language: str | None,
+    release_year: int | None,
+    primary_genre: str | None,
+    available_cohorts: dict[str, Any],
+) -> RuntimeCohortAssignment:
+    if not language or not language.strip():
+        return RuntimeCohortAssignment(
+            requested_cohort_key=None,
+            selected_cohort_key=None,
+            selected_cohort_level="unavailable",
+            normalized_language=None,
+            normalized_era=None,
+            normalized_genre=None,
+            fallback_reason=None,
+            failure_reason="missing_language",
+        )
+
+    if release_year is None:
+        return RuntimeCohortAssignment(
+            requested_cohort_key=None,
+            selected_cohort_key=None,
+            selected_cohort_level="unavailable",
+            normalized_language=None,
+            normalized_era=None,
+            normalized_genre=None,
+            fallback_reason=None,
+            failure_reason="missing_release_year",
+        )
+
+    norm_lang = _normalize_key_part(language)
+    config = CohortBaselineConfig()
+    norm_era = assign_release_era(release_year, config=config)
+    norm_genre = _normalize_key_part(primary_genre) if primary_genre else UNKNOWN_GENRE
+
+    level_1_key = build_cohort_key(level="level_1", language=norm_lang, era=norm_era, primary_genre=norm_genre)
+    level_2_key = build_cohort_key(level="level_2", language=norm_lang, era=norm_era, primary_genre=norm_genre)
+    level_3_key = build_cohort_key(level="level_3", language=norm_lang, era=norm_era, primary_genre=norm_genre)
+    level_4_key = GLOBAL_COHORT_KEY
+
+    candidates = [
+        ("level_1", level_1_key),
+        ("level_2", level_2_key),
+        ("level_3", level_3_key),
+        ("level_4", level_4_key),
+    ]
+
+    selected_key = None
+    selected_level = "unavailable"
+    fallback_reason = None
+    for level, key in candidates:
+        cohort = available_cohorts.get(key)
+        if cohort and cohort.get("eligible_for_normalization"):
+            selected_key = key
+            selected_level = level
+            fallback_reason = None if level == "level_1" else f"fallback_from_level_1_to_{level}"
+            break
+
+    failure_reason = None
+    if selected_key is None:
+        if norm_genre == UNKNOWN_GENRE:
+            failure_reason = "missing_genre_and_no_fallback"
+        elif level_1_key not in available_cohorts:
+            failure_reason = "exact_cohort_baseline_not_found"
+        else:
+            failure_reason = "fallback_cohort_baseline_not_found"
+
+    return RuntimeCohortAssignment(
+        requested_cohort_key=level_1_key,
+        selected_cohort_key=selected_key,
+        selected_cohort_level=selected_level,
+        normalized_language=norm_lang,
+        normalized_era=norm_era,
+        normalized_genre=norm_genre,
+        fallback_reason=fallback_reason,
+        failure_reason=failure_reason,
+    )
+
+
+
 def _build_cohort_records(
     *,
     assignments: list[dict[str, Any]],

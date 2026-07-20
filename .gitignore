@@ -11,3 +11,4 @@ build/
 coverage/
 *.pyc
 *.egg-info/
+.local-artifacts/

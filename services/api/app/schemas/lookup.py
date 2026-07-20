@@ -9,6 +9,7 @@ class LookupRequest(BaseModel):
     year: int | None = Field(default=None, ge=1888, le=2100)
     region: str | None = Field(default=None, min_length=2, max_length=2)
     media_type: Literal["movie"] = "movie"
+    include_shadow: bool = Field(default=False)
 
 
 class DisambiguationChoice(BaseModel):
@@ -40,6 +41,23 @@ class ScoreResponse(BaseModel):
     missing_signals: list[str]
 
 
+class ShadowComparisonResponse(BaseModel):
+    authoritative: bool = False
+    shadow_only: bool = True
+    v1_score: float | None = None
+    v2_score: float | None = None
+    v1_rank: int | None = None
+    v2_rank: int | None = None
+    rank_movement: int | None = None
+    score_delta: float | None = None
+    score_version: str = "cine-score-v2-shadow-1"
+    evidence_gate: str | None = None
+    review_status: str | None = "PENDING"
+    activation_eligible: bool = False
+    ineligible_reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class MovieResponse(BaseModel):
     movie_id: str
     canonical_title: str
@@ -57,6 +75,7 @@ class MovieResponse(BaseModel):
     observations: list[ObservationResponse]
     missing_signals: list[str]
     score: ScoreResponse
+    shadow_comparison: ShadowComparisonResponse | None = None
 
 
 class LookupResponse(BaseModel):

@@ -1,7 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from functools import lru_cache
+import hashlib
 import json
 import logging
+from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -32,6 +36,180 @@ from app.schemas.natural_language import NaturalLanguageDiscoveryRequest
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+def extract_genres_from_movie(movie: Movie) -> list[str]:
+    title_metadata = None
+    for obs in movie.observations:
+        if obs.signal_type == "title_metadata" and obs.source == "tmdb":
+            title_metadata = obs
+            break
+    if title_metadata and isinstance(title_metadata.value, dict):
+        genre_ids = title_metadata.value.get("genre_ids")
+        if genre_ids and isinstance(genre_ids, list):
+            TMDB_GENRE_MAP = {
+                28: "Action",
+                12: "Adventure",
+                16: "Animation",
+                35: "Comedy",
+                80: "Crime",
+                99: "Documentary",
+                18: "Drama",
+                10751: "Family",
+                14: "Fantasy",
+                36: "History",
+                27: "Horror",
+                10402: "Music",
+                9648: "Mystery",
+                10749: "Romance",
+                878: "Science Fiction",
+                53: "Thriller",
+                10770: "TV Movie",
+                10752: "War",
+                37: "Western"
+            }
+            mapped = [TMDB_GENRE_MAP[gid] for gid in genre_ids if gid in TMDB_GENRE_MAP]
+            if mapped:
+                from app.regional_cohort_baselines import _normalize_key_part
+                return [_normalize_key_part(g) for g in mapped]
+        genres = title_metadata.value.get("genres")
+        if genres and isinstance(genres, list):
+            from app.regional_cohort_baselines import _normalize_key_part
+            return [_normalize_key_part(g) for g in genres if isinstance(g, str)]
+    return []
+
+
+def build_signal_values_for_live_movie(vote_average: float | None, vote_count: int | None, popularity: float | None) -> dict[str, Any]:
+    import math
+    rating_val = None
+    rating_ex = None
+    if vote_average is None:
+        rating_ex = "missing"
+    elif vote_average < 0 or vote_average > 10:
+        rating_ex = "out_of_range"
+        rating_val = 0.0
+    else:
+        rating_val = float(vote_average)
+
+    rating_norm_val = None
+    if rating_val is not None and rating_ex is None:
+        rating_norm_val = round(rating_val / 10.0, 6)
+
+    vote_val = None
+    vote_ex = None
+    if vote_count is None:
+        vote_ex = "missing"
+    elif vote_count < 0:
+        vote_ex = "negative_not_allowed"
+        vote_val = 0.0
+    else:
+        vote_val = float(vote_count)
+
+    vote_log1p_val = None
+    if vote_val is not None and vote_ex is None:
+        vote_log1p_val = round(math.log1p(vote_val), 6)
+
+    pop_val = None
+    pop_ex = None
+    if popularity is None:
+        pop_ex = "missing"
+    elif popularity < 0:
+        pop_ex = "negative_not_allowed"
+        pop_val = 0.0
+    else:
+        pop_val = float(popularity)
+
+    pop_log1p_val = None
+    if pop_val is not None and pop_ex is None:
+        pop_log1p_val = round(math.log1p(pop_val), 6)
+
+    return {
+        "tmdb_rating": {"value": rating_val, "scale": "0-10", "exclusion_reason": rating_ex},
+        "tmdb_rating_normalized": {"value": rating_norm_val, "scale": "0-1", "exclusion_reason": rating_ex},
+        "tmdb_vote_count": {"value": vote_val, "scale": None, "exclusion_reason": vote_ex},
+        "tmdb_vote_count_log1p": {"value": vote_log1p_val, "scale": None, "exclusion_reason": vote_ex},
+        "tmdb_popularity": {"value": pop_val, "scale": None, "exclusion_reason": pop_ex},
+        "tmdb_popularity_log1p": {"value": pop_log1p_val, "scale": None, "exclusion_reason": pop_ex},
+    }
+
+
+@lru_cache(maxsize=1)
+def load_regional_shadow_data(artifact_root: str, run_id: str) -> dict[str, Any]:
+    baseline_dir = Path(artifact_root) / run_id
+    if not baseline_dir.exists():
+        parent = Path(artifact_root)
+        if parent.exists():
+            subdirs = sorted([d for d in parent.iterdir() if d.is_dir()], key=lambda x: x.name, reverse=True)
+            if subdirs:
+                baseline_dir = subdirs[0]
+
+    if not baseline_dir.exists():
+        return {"error": "baseline_cohort_artifacts_not_found"}
+
+    baselines_path = baseline_dir / "cohort_baselines.json"
+    assignments_path = baseline_dir / "movie_cohort_assignments.jsonl"
+
+    if not baselines_path.exists() or not assignments_path.exists():
+        return {"error": "baseline_cohort_artifacts_not_found"}
+
+    try:
+        with open(baselines_path, "r", encoding="utf-8") as f:
+            baselines = json.load(f)
+
+        baseline_version = baselines.get("baseline_version")
+        if baseline_version != "regional-cohort-baseline-v1":
+            return {"error": "baseline_cohort_version_mismatch"}
+
+        assignments = {}
+        with open(assignments_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    row = json.loads(line)
+                    assignments[row["tmdb_movie_id"]] = row
+
+        cohort_records = baselines.get("cohort_records", [])
+        cohort_by_key = {r["cohort_key"]: r for r in cohort_records}
+
+        from collections import defaultdict
+        from app.cine_score_v2 import CohortSignalSamples
+
+        grouped_samples = defaultdict(lambda: defaultdict(list))
+        for row in assignments.values():
+            for key_name in ("level_1_cohort_key", "level_2_cohort_key", "level_3_cohort_key", "global_cohort_key"):
+                cohort_key = row.get(key_name)
+                if not cohort_key:
+                    continue
+                for signal_name in ("tmdb_rating_normalized", "tmdb_vote_count_log1p", "tmdb_popularity_log1p"):
+                    val_entry = row["signal_values"].get(signal_name)
+                    if val_entry and val_entry.get("value") is not None:
+                        grouped_samples[cohort_key][signal_name].append(float(val_entry["value"]))
+
+        cohort_samples = {}
+        for cohort_key, values in grouped_samples.items():
+            cohort_samples[cohort_key] = CohortSignalSamples(
+                rating_normalized=tuple(sorted(values.get("tmdb_rating_normalized", []))),
+                vote_count_log1p=tuple(sorted(values.get("tmdb_vote_count_log1p", []))),
+                popularity_log1p=tuple(sorted(values.get("tmdb_popularity_log1p", []))),
+            )
+
+        baseline_hash = hashlib.sha256(baselines_path.read_bytes()).hexdigest()
+        review_status = baselines.get("review_status", {}).get("status", "PENDING")
+        gate_status = baselines.get("gate_status", "BLOCKED_BY_LOW_COVERAGE")
+        activation_eligible = baselines.get("activation_eligible", False)
+        provisional_status = "APPROVED_FOR_SHADOW" if gate_status in ("GO_FOR_ALL_LANGUAGES", "GO_FOR_LIMITED_LANGUAGES") else "PROVISIONAL_SHADOW_ONLY"
+
+        return {
+            "assignments": assignments,
+            "cohort_by_key": cohort_by_key,
+            "cohort_samples": cohort_samples,
+            "baseline_hash": baseline_hash,
+            "review_status": review_status,
+            "gate_status": gate_status,
+            "activation_eligible": activation_eligible,
+            "provisional_status": provisional_status,
+        }
+    except Exception as exc:
+        logger.warning("Failed to load regional shadow data: %s", exc)
+        return {"error": "baseline_cohort_artifacts_load_error"}
+
 
 class LookupService:
     def __init__(self, db: Session, tmdb: TmdbAdapter, settings_override: Settings | None = None) -> None:
@@ -39,26 +217,26 @@ class LookupService:
         self.tmdb = tmdb
         self.settings = settings_override or settings
 
-    async def lookup(self, *, title: str, year: int | None, region: str | None, media_type: str) -> dict:
+    async def lookup(self, *, title: str, year: int | None, region: str | None, media_type: str, include_shadow: bool = False) -> dict:
         normalized_title = normalize_title(title)
         normalized_region = normalize_region(region)
         local_matches = self._find_local_matches(normalized_title, year, media_type)
         local_fresh = [movie for movie in local_matches if self._movie_state(movie) == FreshnessState.FRESH]
         if len(local_fresh) == 1:
-            return self._resolved_payload(local_fresh[0], normalized_title, year, normalized_region, "local_cache")
+            return self._resolved_payload(local_fresh[0], normalized_title, year, normalized_region, "local_cache", include_shadow=include_shadow)
         if len(local_fresh) > 1:
             return self._disambiguation_payload(local_fresh, normalized_title, normalized_region)
 
         local_stale_usable = [movie for movie in local_matches if self._movie_state(movie) == FreshnessState.STALE_USABLE]
         if len(local_stale_usable) == 1:
-            return self._resolved_payload(local_stale_usable[0], normalized_title, year, normalized_region, "local_cache")
+            return self._resolved_payload(local_stale_usable[0], normalized_title, year, normalized_region, "local_cache", include_shadow=include_shadow)
         if len(local_stale_usable) > 1:
             return self._disambiguation_payload(local_stale_usable, normalized_title, normalized_region)
 
         if not self.tmdb.enabled:
             if local_matches:
                 if len(local_matches) == 1:
-                    return self._resolved_payload(local_matches[0], normalized_title, year, normalized_region, "local_cache")
+                    return self._resolved_payload(local_matches[0], normalized_title, year, normalized_region, "local_cache", include_shadow=include_shadow)
                 return self._disambiguation_payload(local_matches, normalized_title, normalized_region)
             raise RuntimeError("TMDB token is not configured and no local data exists")
 
@@ -81,7 +259,7 @@ class LookupService:
                 region=normalized_region,
             )
             raise RuntimeError("TMDB request failed") from exc
-        return self._resolved_payload(movie, normalized_title, year, normalized_region, "tmdb")
+        return self._resolved_payload(movie, normalized_title, year, normalized_region, "tmdb", include_shadow=include_shadow)
 
     async def recommend_from_seed_movie(
         self,
@@ -89,6 +267,7 @@ class LookupService:
         seed_movie_id: str,
         region: str | None = None,
         limit: int = 20,
+        include_shadow: bool = False,
     ) -> dict:
         seed = self._find_movie_by_id(seed_movie_id)
         normalized_region = normalize_region(region)
@@ -146,6 +325,7 @@ class LookupService:
             candidates=candidates,
         )
         ranked = self.rank_seed_recommendation_candidates(persisted)[:constrained_limit]
+        self._attach_shadow_comparisons(ranked, include_shadow=include_shadow)
         return {
             "status": "ok",
             "seed": self._seed_payload(seed),
@@ -187,6 +367,7 @@ class LookupService:
 
         persisted = self.persist_discovery_candidates(candidates=candidates)
         ranked = self.rank_discovery_candidates(persisted)[: request.page_size]
+        self._attach_shadow_comparisons(ranked, include_shadow=request.include_shadow)
         return {
             "status": "ok",
             "page": {
@@ -240,6 +421,9 @@ class LookupService:
         candidate_payload = dict(untrusted)
         candidate_payload["page"] = request.page
         candidate_payload["page_size"] = request.page_size
+        candidate_payload["include_shadow"] = request.include_shadow
+        if getattr(request, "region", None) is not None:
+            candidate_payload["region"] = request.region
 
         try:
             normalized_request = DiscoveryRequest.model_validate(candidate_payload)
@@ -658,6 +842,26 @@ class LookupService:
                     scale=candidate.rating_scale,
                 )
             )
+        # Add title_metadata observation with genre_ids if present
+        if candidate.genre_ids:
+            items.append(
+                self._observation_item(
+                    signal_type="title_metadata",
+                    value={
+                        "title": candidate.title,
+                        "original_title": candidate.original_title,
+                        "release_date": candidate.release_date,
+                        "region": None,
+                        "genre_ids": candidate.genre_ids,
+                    },
+                    fetched_at=candidate.fetched_at,
+                    raw_hash=candidate.raw_response_hash,
+                    source_movie_id=candidate.source_movie_id,
+                    source_url=source_url,
+                    fresh_delta=timedelta(days=settings.metadata_fresh_days),
+                    stale_delta=timedelta(days=settings.metadata_stale_days),
+                )
+            )
         for item in items:
             item["fetch_status"] = candidate.fetch_status
             item["parser_version"] = candidate.parser_version
@@ -734,7 +938,7 @@ class LookupService:
             observation.raw_response_hash = item["raw_response_hash"]
 
     def _resolved_payload(
-        self, movie: Movie, normalized_title: str, year: int | None, region: str | None, source: str
+        self, movie: Movie, normalized_title: str, year: int | None, region: str | None, source: str, include_shadow: bool = False
     ) -> dict:
         observations = []
         freshness_summary: dict[str, str] = {}
@@ -788,7 +992,7 @@ class LookupService:
             requested_version=self.settings.active_ranking_version,
             settings=self.settings,
         )
-        return {
+        res = {
             "status": "resolved",
             "normalized_title": normalized_title,
             "region": region,
@@ -814,6 +1018,8 @@ class LookupService:
             },
             "disambiguation_choices": [],
         }
+        self._attach_shadow_comparisons([res], include_shadow=include_shadow)
+        return res
 
     def _disambiguation_payload(self, movies: list[Movie], normalized_title: str, region: str | None) -> dict:
         choices = []
@@ -866,3 +1072,182 @@ class LookupService:
             "movie": None,
             "disambiguation_choices": deduped[:5],
         }
+
+    def _attach_shadow_comparisons(self, results: list[dict], include_shadow: bool) -> None:
+        if not include_shadow or not self.settings.cinesense_enable_shadow_diagnostics:
+            return
+
+        shadow_data = load_regional_shadow_data(
+            self.settings.cinesense_shadow_artifact_root,
+            self.settings.cinesense_shadow_run_id
+        )
+
+        v2_scores = []
+        for item in results:
+            tmdb_id = item.get("tmdb_source_movie_id")
+            if not tmdb_id:
+                movie_obj = item.get("movie")
+                if movie_obj:
+                    tmdb_id = item.get("source_movie_id") or movie_obj.get("source_movie_id")
+
+            v2_score = None
+            ineligible_reason = None
+            assignment = None
+            error_status = shadow_data.get("error") if shadow_data else "baseline_cohort_artifacts_not_found"
+            if error_status:
+                if error_status == "baseline_cohort_version_mismatch":
+                    raise ValueError("baseline_cohort_version_mismatch")
+                elif error_status == "baseline_cohort_artifacts_not_found":
+                    ineligible_reason = "baseline_artifacts_not_found"
+                elif error_status == "baseline_cohort_artifacts_load_error":
+                    ineligible_reason = "baseline_artifacts_load_error"
+                else:
+                    ineligible_reason = error_status
+            elif not tmdb_id:
+                ineligible_reason = "insufficient_live_signals"
+            else:
+                movie_db = self._find_tmdb_movie_by_source_id(tmdb_id)
+                if not movie_db:
+                    ineligible_reason = "insufficient_live_signals"
+                else:
+                    from app.regional_cohort_baselines import assign_runtime_cohort, build_cohort_key, GLOBAL_COHORT_KEY
+
+                    entity_resolution_status = "VALIDATED_EXACT_MATCH"
+                    review_decision = None
+                    if shadow_data and "assignments" in shadow_data:
+                        saved_assignment = shadow_data["assignments"].get(tmdb_id)
+                        if saved_assignment:
+                            entity_resolution_status = saved_assignment.get("entity_resolution_status") or "VALIDATED_EXACT_MATCH"
+                            review_decision = saved_assignment.get("review_decision")
+
+                    # Extract observations
+                    audience = None
+                    popularity = None
+                    for obs in movie_db.observations:
+                        if obs.source == "tmdb":
+                            if obs.signal_type == "audience_reception":
+                                audience = obs
+                            elif obs.signal_type == "popularity":
+                                popularity = obs
+
+                    vote_average = float(audience.numeric_value) if audience and audience.numeric_value is not None else None
+                    vote_count = audience.evidence_count if audience else None
+                    popularity_value = float(popularity.numeric_value) if popularity and popularity.numeric_value is not None else None
+
+                    # Build signal values
+                    sig_vals = build_signal_values_for_live_movie(vote_average, vote_count, popularity_value)
+
+                    # Extract language and release year and genre
+                    language = movie_db.original_language
+                    release_year = movie_db.release_year
+                    genres = extract_genres_from_movie(movie_db)
+                    primary_genre = genres[0] if genres else None
+
+                    available_cohorts = shadow_data.get("cohort_by_key", {})
+
+                    cohort_assignment = assign_runtime_cohort(
+                        language=language,
+                        release_year=release_year,
+                        primary_genre=primary_genre,
+                        available_cohorts=available_cohorts,
+                    )
+
+                    if cohort_assignment.failure_reason:
+                        ineligible_reason = cohort_assignment.failure_reason
+                    elif (sig_vals["tmdb_rating_normalized"]["value"] is None and
+                          sig_vals["tmdb_vote_count_log1p"]["value"] is None and
+                          sig_vals["tmdb_popularity_log1p"]["value"] is None):
+                        ineligible_reason = "insufficient_live_signals"
+                    else:
+                        assignment = {
+                            "tmdb_movie_id": tmdb_id,
+                            "original_language": cohort_assignment.normalized_language,
+                            "release_year": release_year,
+                            "era": cohort_assignment.normalized_era,
+                            "primary_genre": cohort_assignment.normalized_genre,
+                            "level_1_cohort_key": cohort_assignment.requested_cohort_key,
+                            "level_2_cohort_key": build_cohort_key(level="level_2", language=cohort_assignment.normalized_language, era=cohort_assignment.normalized_era, primary_genre=cohort_assignment.normalized_genre) if cohort_assignment.normalized_language else None,
+                            "level_3_cohort_key": build_cohort_key(level="level_3", language=cohort_assignment.normalized_language, era=cohort_assignment.normalized_era, primary_genre=cohort_assignment.normalized_genre) if cohort_assignment.normalized_language else None,
+                            "global_cohort_key": GLOBAL_COHORT_KEY,
+                            "selected_eligible_cohort_key": cohort_assignment.selected_cohort_key,
+                            "selected_eligible_cohort_level": cohort_assignment.selected_cohort_level,
+                            "entity_resolution_status": entity_resolution_status,
+                            "review_decision": review_decision,
+                            "signal_values": sig_vals,
+                        }
+
+                        selected_key = assignment.get("selected_eligible_cohort_key")
+                        cohort_record = shadow_data.get("cohort_by_key", {}).get(selected_key) if selected_key else None
+                        cohort_samples = shadow_data.get("cohort_samples", {}).get(selected_key) if selected_key else None
+                        try:
+                            from app.cine_score_v2 import compute_cine_score_v2_shadow
+                            v2_res = compute_cine_score_v2_shadow(
+                                assignment=assignment,
+                                cohort_record=cohort_record,
+                                cohort_samples=cohort_samples,
+                                baseline_hash=shadow_data["baseline_hash"],
+                                provisional_status=shadow_data["provisional_status"],
+                                activation_eligible=shadow_data["activation_eligible"],
+                            )
+                            v2_score = v2_res.get("display_total")
+                            if v2_score is None:
+                                ineligible_reason = "insufficient_live_signals"
+                        except Exception as exc:
+                            logger.warning("Failed to compute v2 shadow score: %s", exc)
+                            v2_score = None
+                            ineligible_reason = "insufficient_live_signals"
+
+            v2_scores.append((v2_score, ineligible_reason, assignment))
+
+        indexed_v2 = []
+        for idx, (v2_score, _, _) in enumerate(v2_scores):
+            if v2_score is not None:
+                indexed_v2.append((idx, v2_score))
+
+        indexed_v2.sort(key=lambda x: (-x[1], x[0]))
+
+        v2_ranks = {}
+        for rank_idx, (orig_idx, _) in enumerate(indexed_v2, start=1):
+            v2_ranks[orig_idx] = rank_idx
+
+        for idx, item in enumerate(results):
+            v2_score, ineligible_reason, assignment = v2_scores[idx]
+            v1_score = item.get("score")
+            if v1_score is None:
+                movie_obj = item.get("movie")
+                if movie_obj:
+                    score_obj = movie_obj.get("score")
+                    if score_obj:
+                        v1_score = score_obj.get("total")
+
+            v1_rank = idx + 1
+            v2_rank = v2_ranks.get(idx)
+            rank_movement = v1_rank - v2_rank if v2_rank is not None else None
+            score_delta = round(v2_score - v1_score, 2) if (v2_score is not None and v1_score is not None) else None
+
+            evidence_gate = shadow_data.get("gate_status") if shadow_data else None
+            review_status = (shadow_data.get("review_status") if shadow_data else "PENDING") or "PENDING"
+            activation_eligible = bool(shadow_data.get("activation_eligible")) if (shadow_data and shadow_data.get("activation_eligible") is not None) else False
+
+            comp = {
+                "authoritative": False,
+                "shadow_only": True,
+                "v1_score": v1_score,
+                "v2_score": v2_score,
+                "v1_rank": v1_rank if len(results) > 1 else None,
+                "v2_rank": v2_rank,
+                "rank_movement": rank_movement,
+                "score_delta": score_delta,
+                "score_version": "cine-score-v2-shadow-1",
+                "evidence_gate": evidence_gate,
+                "review_status": review_status,
+                "activation_eligible": activation_eligible,
+                "ineligible_reason": ineligible_reason,
+                "warnings": [],
+            }
+
+            if "movie" in item:
+                if isinstance(item["movie"], dict):
+                    item["movie"]["shadow_comparison"] = comp
+            else:
+                item["shadow_comparison"] = comp

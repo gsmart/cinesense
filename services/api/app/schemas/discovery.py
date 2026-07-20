@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.lookup import ShadowComparisonResponse
+
 CURRENT_YEAR_PLUS_ONE = datetime.now().year + 1
 MIN_RELEASE_YEAR = 1888
 MIN_RUNTIME_MINUTES = 1
@@ -47,6 +49,7 @@ class DiscoveryRequest(BaseModel):
     availability_required: bool = False
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=MAX_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE)
+    include_shadow: bool = Field(default=False)
 
     @field_validator("genres", mode="before")
     @classmethod
@@ -150,6 +153,7 @@ class DiscoveryResultResponse(BaseModel):
     missing_signals: list[str]
     provenance: DiscoveryProvenanceResponse
     freshness: dict[str, str]
+    shadow_comparison: ShadowComparisonResponse | None = None
 
 
 class DiscoveryPageMetadata(BaseModel):

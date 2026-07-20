@@ -50,6 +50,7 @@ export function LookupForm() {
   const [title, setTitle] = useState("");
   const [year, setYear] = useState("");
   const [region, setRegion] = useState("");
+  const [includeShadow, setIncludeShadow] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<LookupResponse | null>(initialResponse);
@@ -58,6 +59,7 @@ export function LookupForm() {
   const [recommendations, setRecommendations] = useState<RecommendationsResponse | null>(null);
 
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+  const showDiagnosticsToggle = process.env.NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS === "true";
   const achievements = buildAchievements(response, recommendationStatus, recommendations);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -72,6 +74,7 @@ export function LookupForm() {
       year: year ? Number(year) : null,
       region: region || null,
       media_type: "movie",
+      include_shadow: includeShadow,
     };
 
     const request = await fetch(`${apiBase}/api/v1/lookup`, {
@@ -107,6 +110,7 @@ export function LookupForm() {
         seed_movie_id: response.movie.movie_id,
         region: region || null,
         page_size: 20,
+        include_shadow: includeShadow,
       }),
     });
 
@@ -150,14 +154,22 @@ export function LookupForm() {
 
       <form onSubmit={onSubmit} style={styles.form}>
         <label style={styles.field}>
-          <span>Title</span>
-          <input required value={title} onChange={(event) => setTitle(event.target.value)} style={styles.input} />
+          <span>Movie title</span>
+          <input
+            required
+            placeholder="e.g. The Dark Knight or Ved"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            style={styles.input}
+          />
         </label>
         <label style={styles.field}>
-          <span>Release year</span>
+          <span>Release year (optional)</span>
           <input
-            inputMode="numeric"
-            pattern="[0-9]*"
+            type="number"
+            min={1888}
+            max={2100}
+            placeholder="e.g. 2008"
             value={year}
             onChange={(event) => setYear(event.target.value)}
             style={styles.input}
@@ -178,6 +190,18 @@ export function LookupForm() {
             <option value="movie">movie</option>
           </select>
         </label>
+        {showDiagnosticsToggle && (
+          <label style={{ ...styles.field, display: "flex", flexDirection: "row", alignItems: "center", gap: 10, cursor: "pointer", gridColumn: "span 2", minHeight: 48 }}>
+            <input
+              id="enable-shadow-diagnostics"
+              type="checkbox"
+              checked={includeShadow}
+              onChange={(event) => setIncludeShadow(event.target.checked)}
+              style={{ width: 20, height: 20, cursor: "pointer" }}
+            />
+            <span style={{ fontWeight: 500, color: "var(--text)" }}>Enable Shadow Diagnostics (v2)</span>
+          </label>
+        )}
         <button type="submit" style={styles.button} disabled={status === "loading"}>
           {status === "loading" ? "Looking up..." : "Lookup"}
         </button>

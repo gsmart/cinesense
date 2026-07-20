@@ -96,6 +96,7 @@ def test_discovery_api_valid_request_returns_200_and_normalized_request(monkeypa
         "availability_required": False,
         "page": 2,
         "page_size": 2,
+        "include_shadow": False,
     }
     assert body["results"][0]["tmdb_source_movie_id"] == "949"
     assert body["page"] == {

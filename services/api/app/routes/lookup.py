@@ -1,3 +1,4 @@
+import inspect
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -20,13 +21,23 @@ def get_natural_language_discovery_interpreter() -> NaturalLanguageDiscoveryInte
 
 @router.post("/lookup", response_model=LookupResponse)
 async def lookup_movie(payload: LookupRequest, db: Session = Depends(get_db)) -> LookupResponse:
-    service = LookupService(db, TmdbAdapter(get_settings()))
+    settings = get_settings()
+    if payload.include_shadow and not settings.cinesense_enable_shadow_diagnostics:
+        raise HTTPException(status_code=403, detail="Shadow diagnostics are disabled in this environment")
+    service = LookupService(db, TmdbAdapter(settings))
+
+    kwargs = {}
+    sig = inspect.signature(service.lookup)
+    if "include_shadow" in sig.parameters:
+        kwargs["include_shadow"] = payload.include_shadow
+
     try:
         result = await service.lookup(
             title=payload.title,
             year=payload.year,
             region=payload.region,
             media_type=payload.media_type,
+            **kwargs,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -35,12 +46,22 @@ async def lookup_movie(payload: LookupRequest, db: Session = Depends(get_db)) ->
 
 @router.post("/recommendations", response_model=RecommendationsResponse)
 async def recommend_movies(payload: RecommendationsRequest, db: Session = Depends(get_db)) -> RecommendationsResponse:
-    service = LookupService(db, TmdbAdapter(get_settings()))
+    settings = get_settings()
+    if payload.include_shadow and not settings.cinesense_enable_shadow_diagnostics:
+        raise HTTPException(status_code=403, detail="Shadow diagnostics are disabled in this environment")
+    service = LookupService(db, TmdbAdapter(settings))
+
+    kwargs = {}
+    sig = inspect.signature(service.recommend_from_seed_movie)
+    if "include_shadow" in sig.parameters:
+        kwargs["include_shadow"] = payload.include_shadow
+
     try:
         result = await service.recommend_from_seed_movie(
             seed_movie_id=str(payload.seed_movie_id),
             region=payload.region,
             limit=payload.page_size,
+            **kwargs,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -64,7 +85,10 @@ async def recommend_movies(payload: RecommendationsRequest, db: Session = Depend
 
 @router.post("/discover", response_model=DiscoveryResponse)
 async def discover_movies(payload: DiscoveryRequest, db: Session = Depends(get_db)) -> DiscoveryResponse:
-    service = LookupService(db, TmdbAdapter(get_settings()))
+    settings = get_settings()
+    if payload.include_shadow and not settings.cinesense_enable_shadow_diagnostics:
+        raise HTTPException(status_code=403, detail="Shadow diagnostics are disabled in this environment")
+    service = LookupService(db, TmdbAdapter(settings))
     try:
         result = await service.discover_movies(request=payload)
     except RuntimeError as exc:
@@ -92,7 +116,10 @@ async def discover_movies_natural_language(
     db: Session = Depends(get_db),
     interpreter: NaturalLanguageDiscoveryInterpreter = Depends(get_natural_language_discovery_interpreter),
 ) -> NaturalLanguageDiscoveryResponse:
-    service = LookupService(db, TmdbAdapter(get_settings()))
+    settings = get_settings()
+    if payload.include_shadow and not settings.cinesense_enable_shadow_diagnostics:
+        raise HTTPException(status_code=403, detail="Shadow diagnostics are disabled in this environment")
+    service = LookupService(db, TmdbAdapter(settings))
     result = await service.discover_from_natural_language(request=payload, interpreter=interpreter)
 
     status = result["status"]

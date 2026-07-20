@@ -51,3 +51,4 @@ Before any broader launch:
 - confirm optional LLM provider usage is acceptable for the target environment
 - confirm `cine-score-v2` remains disabled unless a reviewed activation decision exists
 - confirm internal review artifacts are not being exposed as product data
+- **Local Shadow Diagnostics Gate**: The `include_shadow` request flag and UI toggle are local-development-only diagnostic features. The environment variables `CINESENSE_ENABLE_SHADOW_DIAGNOSTICS` and `NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS` must remain `false` (disabled) by default in all production deployments, ensuring that any shadow request returns a `403 Forbidden` response and no shadow details are ever exposed or served to general users.

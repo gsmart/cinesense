@@ -461,6 +461,17 @@ class TmdbAdapter:
         poster_url = f"{self._settings.base_image_url}{poster_path}" if poster_path else None
         source_url = f"https://www.themoviedb.org/movie/{source_movie_id}"
 
+        genres_raw = payload.get("genres") or []
+        genre_ids = []
+        if isinstance(genres_raw, list):
+            for g in genres_raw:
+                if isinstance(g, dict) and "id" in g:
+                    genre_ids.append(g["id"])
+                elif isinstance(g, int):
+                    genre_ids.append(g)
+        if not genre_ids and isinstance(payload.get("genre_ids"), list):
+            genre_ids = payload.get("genre_ids")
+
         observations = [
             self._observation(
                 signal_type="title_metadata",
@@ -469,6 +480,7 @@ class TmdbAdapter:
                     "original_title": payload.get("original_title"),
                     "release_date": payload.get("release_date"),
                     "region": region,
+                    "genre_ids": genre_ids,
                 },
                 fetched_at=fetched_at,
                 raw_hash=raw_hash,

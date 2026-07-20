@@ -55,8 +55,26 @@ export type LookupResponse =
           components: Record<string, number | null>;
           missing_signals: string[];
         };
+        shadow_comparison: ShadowComparisonResponse | null;
       };
     };
+
+export type ShadowComparisonResponse = {
+  authoritative: boolean;
+  shadow_only: boolean;
+  v1_score: number | null;
+  v2_score: number | null;
+  v1_rank: number | null;
+  v2_rank: number | null;
+  rank_movement: number | null;
+  score_delta: number | null;
+  score_version: string;
+  evidence_gate: string | null;
+  review_status: string | null;
+  activation_eligible: boolean;
+  ineligible_reason: string | null;
+  warnings: string[];
+};
 
 export type RecommendationsResponse = {
   status: "ok";
@@ -90,6 +108,7 @@ export type RecommendationsResponse = {
       source_url: string | null;
     };
     freshness: Record<string, string>;
+    shadow_comparison?: ShadowComparisonResponse | null;
   }>;
   page: {
     page: 1;
@@ -112,6 +131,7 @@ export type DiscoveryRequestPayload = {
   availability_required?: boolean;
   page: number;
   page_size: number;
+  include_shadow?: boolean;
 };
 
 export type DiscoveryNormalizedRequest = {
@@ -151,6 +171,7 @@ export type DiscoveryResult = {
     source_url: string | null;
   };
   freshness: Record<string, string>;
+  shadow_comparison?: ShadowComparisonResponse | null;
 };
 
 export type DiscoveryPage = {
@@ -169,8 +190,10 @@ export type DiscoveryResponse = {
 
 export type NaturalLanguageDiscoveryRequestPayload = {
   query: string;
+  region?: string;
   page: number;
   page_size: number;
+  include_shadow?: boolean;
 };
 
 export type NaturalLanguageDiscoveryResponse = {

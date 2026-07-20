@@ -63,6 +63,31 @@ export function MovieCard({
         </article>
       </div>
 
+      {movie.shadow_comparison && (
+        <div style={{ ...styles.grid, marginTop: 16 }}>
+          <article style={{ ...styles.panel, gridColumn: "span 2", border: "1px dashed var(--accent)", background: "rgba(141,46,22,0.05)" }}>
+            <h3 style={{ ...styles.sectionTitle, color: "var(--accent)" }}>Shadow Diagnostics (cine-score-v2)</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginTop: 12 }}>
+              <div>
+                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Shadow Version:</strong> {movie.shadow_comparison.score_version}</p>
+                <p style={{ margin: "2px 0", fontSize: 13 }}>
+                  <strong>V2 Score:</strong> {movie.shadow_comparison.v2_score !== null ? movie.shadow_comparison.v2_score.toFixed(2) : "N/A"} (Authoritative: {movie.shadow_comparison.authoritative ? "Yes" : "No"})
+                </p>
+                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Score Delta:</strong> {movie.shadow_comparison.score_delta !== null ? (movie.shadow_comparison.score_delta > 0 ? `+${movie.shadow_comparison.score_delta}` : movie.shadow_comparison.score_delta) : "N/A"}</p>
+              </div>
+              <div>
+                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Evidence Gate:</strong> {movie.shadow_comparison.evidence_gate || "N/A"}</p>
+                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Human Review:</strong> {movie.shadow_comparison.review_status || "PENDING"}</p>
+                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Activation Eligible:</strong> {movie.shadow_comparison.activation_eligible ? "Yes" : "No"}</p>
+                {movie.shadow_comparison.ineligible_reason && (
+                  <p style={{ margin: "2px 0", fontSize: 13, color: "var(--accent)" }}><strong>Ineligible Reason:</strong> {movie.shadow_comparison.ineligible_reason}</p>
+                )}
+              </div>
+            </div>
+          </article>
+        </div>
+      )}
+
       <div style={styles.grid}>
         <article style={styles.panel}>
           <h3 style={styles.sectionTitle}>Provenance</h3>
@@ -255,6 +280,36 @@ export function RecommendationsPanel({
                 </p>
               </article>
             </div>
+
+            {item.shadow_comparison && (
+              <div style={{ ...styles.grid, marginTop: 12 }}>
+                <article style={{ ...styles.panel, gridColumn: "span 2", border: "1px dashed var(--accent)", background: "rgba(141,46,22,0.03)" }}>
+                  <h4 style={{ ...styles.sectionTitle, color: "var(--accent)" }}>Shadow Diagnostics (cine-score-v2)</h4>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginTop: 8 }}>
+                    <div>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Shadow Version:</strong> {item.shadow_comparison.score_version}</p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}>
+                        <strong>V2 Score:</strong> {item.shadow_comparison.v2_score !== null ? item.shadow_comparison.v2_score.toFixed(2) : "N/A"}
+                      </p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}>
+                        <strong>V2 Rank:</strong> {item.shadow_comparison.v2_rank !== null ? `#${item.shadow_comparison.v2_rank}` : "N/A"} (V1: #{item.shadow_comparison.v1_rank})
+                      </p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}>
+                        <strong>Movement:</strong> {item.shadow_comparison.rank_movement !== null ? (item.shadow_comparison.rank_movement > 0 ? `+${item.shadow_comparison.rank_movement}` : item.shadow_comparison.rank_movement) : "N/A"}
+                      </p>
+                    </div>
+                    <div>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Evidence Gate:</strong> {item.shadow_comparison.evidence_gate || "N/A"}</p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Human Review:</strong> {item.shadow_comparison.review_status || "PENDING"}</p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Activation Eligible:</strong> {item.shadow_comparison.activation_eligible ? "Yes" : "No"}</p>
+                      {item.shadow_comparison.ineligible_reason && (
+                        <p style={{ margin: "2px 0", fontSize: 12, color: "var(--accent)" }}><strong>Ineligible:</strong> {item.shadow_comparison.ineligible_reason}</p>
+                      )}
+                    </div>
+                  </div>
+                </article>
+              </div>
+            )}
           </article>
         ))}
       </div>

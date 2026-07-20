@@ -13,6 +13,7 @@ import type {
 } from "@/lib/types";
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const showDiagnosticsToggle = process.env.NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS === "true";
 const examplePrompts = [
   "Marathi thrillers released between 2016 and 2018",
   "English science-fiction movies after 2015 under 130 minutes",
@@ -209,6 +210,7 @@ export function DiscoveryForm() {
   const [response, setResponse] = useState<DiscoveryResponse | null>(null);
   const [interpretedRequest, setInterpretedRequest] = useState<DiscoveryNormalizedRequest | null>(null);
   const [lastNaturalLanguageQuery, setLastNaturalLanguageQuery] = useState<string | null>(null);
+  const [includeShadow, setIncludeShadow] = useState(false);
 
   const manualCanSubmit = hasMeaningfulNarrowing(filters) && status !== "loading" && status !== "paging";
   const trimmedQuery = naturalLanguageQuery.trim();
@@ -243,7 +245,7 @@ export function DiscoveryForm() {
     const result = await fetch(`${apiBase}/api/v1/discover`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ ...request, include_shadow: includeShadow }),
     });
 
     const data = (await result.json().catch(() => ({}))) as ControlledErrorResponse | DiscoveryResponse;
@@ -266,7 +268,7 @@ export function DiscoveryForm() {
     const result = await fetch(`${apiBase}/api/v1/discover/natural-language`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ ...request, include_shadow: includeShadow }),
     });
 
     const data = (await result.json().catch(() => ({}))) as ControlledErrorResponse | NaturalLanguageDiscoveryResponse;
@@ -308,6 +310,7 @@ export function DiscoveryForm() {
     }
     await runNaturalLanguageDiscovery({
       query,
+      region: filters.region || undefined,
       page: 1,
       page_size: parseInteger(filters.pageSize) ?? 20,
     });
@@ -430,7 +433,7 @@ export function DiscoveryForm() {
           </section>
 
           <section style={styles.section}>
-            <h2 style={styles.subheading}>Page Size</h2>
+            <h2 style={styles.subheading}>Diagnostics & Page Size</h2>
             <div style={styles.fieldGrid}>
               <label style={styles.field}>
                 <span>Results per page</span>
@@ -442,6 +445,18 @@ export function DiscoveryForm() {
                   style={styles.input}
                 />
               </label>
+              {showDiagnosticsToggle && (
+                <label style={{ ...styles.field, display: "flex", flexDirection: "row", alignItems: "center", gap: 10, cursor: "pointer", minHeight: 48, marginTop: 24 }}>
+                  <input
+                    id="enable-shadow-diagnostics-nl"
+                    type="checkbox"
+                    checked={includeShadow}
+                    onChange={(event) => setIncludeShadow(event.target.checked)}
+                    style={{ width: 20, height: 20, cursor: "pointer" }}
+                  />
+                  <span style={{ fontWeight: 500, color: "var(--text)" }}>Enable Shadow Diagnostics (v2)</span>
+                </label>
+              )}
             </div>
           </section>
 
@@ -508,12 +523,26 @@ export function DiscoveryForm() {
           </section>
 
           <section style={styles.section}>
-            <h2 style={styles.subheading}>Availability</h2>
-            <label style={styles.disabledField}>
-              <input type="checkbox" disabled />
-              <span>Regional streaming availability (coming later)</span>
-            </label>
-            <p style={styles.helper}>This control stays disabled until Phase 2G. The UI never submits availability filters in this phase.</p>
+            <h2 style={styles.subheading}>Availability & Diagnostics</h2>
+            <div style={{ display: "grid", gap: 12 }}>
+              <label style={styles.disabledField}>
+                <input type="checkbox" disabled />
+                <span>Regional streaming availability (coming later)</span>
+              </label>
+              {showDiagnosticsToggle && (
+                <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                  <input
+                    id="enable-shadow-diagnostics-manual"
+                    type="checkbox"
+                    checked={includeShadow}
+                    onChange={(event) => setIncludeShadow(event.target.checked)}
+                    style={{ width: 18, height: 18, cursor: "pointer" }}
+                  />
+                  <span style={{ fontWeight: 500, color: "var(--text)" }}>Enable Shadow Diagnostics (v2)</span>
+                </label>
+              )}
+            </div>
+            <p style={styles.helper}>Streaming availability stays disabled. Shadow diagnostics shows local v2 comparison data.</p>
           </section>
 
           <div style={styles.actionRow}>
@@ -726,6 +755,36 @@ function DiscoveryResultsPanel({
                 </p>
               </article>
             </div>
+
+            {item.shadow_comparison && (
+              <div style={{ ...styles.grid, marginTop: 12 }}>
+                <article style={{ ...styles.panel, gridColumn: "span 2", border: "1px dashed var(--accent)", background: "rgba(141,46,22,0.03)" }}>
+                  <h4 style={{ ...styles.sectionTitle, color: "var(--accent)" }}>Shadow Diagnostics (cine-score-v2)</h4>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginTop: 8 }}>
+                    <div>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Shadow Version:</strong> {item.shadow_comparison.score_version}</p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}>
+                        <strong>V2 Score:</strong> {item.shadow_comparison.v2_score !== null ? item.shadow_comparison.v2_score.toFixed(2) : "N/A"}
+                      </p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}>
+                        <strong>V2 Rank:</strong> {item.shadow_comparison.v2_rank !== null ? `#${item.shadow_comparison.v2_rank}` : "N/A"} (V1: #{item.shadow_comparison.v1_rank})
+                      </p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}>
+                        <strong>Movement:</strong> {item.shadow_comparison.rank_movement !== null ? (item.shadow_comparison.rank_movement > 0 ? `+${item.shadow_comparison.rank_movement}` : item.shadow_comparison.rank_movement) : "N/A"}
+                      </p>
+                    </div>
+                    <div>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Evidence Gate:</strong> {item.shadow_comparison.evidence_gate || "N/A"}</p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Human Review:</strong> {item.shadow_comparison.review_status || "PENDING"}</p>
+                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Activation Eligible:</strong> {item.shadow_comparison.activation_eligible ? "Yes" : "No"}</p>
+                      {item.shadow_comparison.ineligible_reason && (
+                        <p style={{ margin: "2px 0", fontSize: 12, color: "var(--accent)" }}><strong>Ineligible:</strong> {item.shadow_comparison.ineligible_reason}</p>
+                      )}
+                    </div>
+                  </div>
+                </article>
+              </div>
+            )}
           </article>
         ))}
       </div>

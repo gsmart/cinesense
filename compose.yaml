@@ -27,8 +27,15 @@ services:
       CINESENSE_LLM_API_KEY: ${CINESENSE_LLM_API_KEY:-}
       CINESENSE_LLM_MODEL: ${CINESENSE_LLM_MODEL:-}
       CINESENSE_LLM_TIMEOUT_SECONDS: ${CINESENSE_LLM_TIMEOUT_SECONDS:-10}
+      CINESENSE_ENABLE_SHADOW_DIAGNOSTICS: ${CINESENSE_ENABLE_SHADOW_DIAGNOSTICS:-false}
+      CINESENSE_SHADOW_ARTIFACT_ROOT: ${CINESENSE_SHADOW_ARTIFACT_ROOT:-/app/.local-artifacts/regional-shadow}
+      CINESENSE_SHADOW_RUN_ID: ${CINESENSE_SHADOW_RUN_ID:-20260719T194508Z}
+      CINESENSE_ACTIVE_RANKING_VERSION: ${CINESENSE_ACTIVE_RANKING_VERSION:-cine-score-v1}
+      CINESENSE_SHADOW_RANKING_VERSION: ${CINESENSE_SHADOW_RANKING_VERSION:-disabled}
     ports:
       - "8000:8000"
+    volumes:
+      - ./.local-artifacts/regional-shadow:/app/.local-artifacts/regional-shadow:ro
     depends_on:
       db:
         condition: service_healthy
@@ -43,8 +50,11 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS: ${NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS:-false}
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS: ${NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS:-false}
     ports:
       - "3000:3000"
     depends_on:

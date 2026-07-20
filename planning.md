@@ -1,20 +1,20 @@
 # Planning
 
-Current date: July 19, 2026
+Current date: July 20, 2026
 Inspected branch: `main`
-Inspected HEAD: `7ccb601dd0a738ca10b9bddeae47f3cb1ae520f9`
-Worktree note: uncommitted files exist for regional human-judgment and bounded weight-evaluation workflow work and are not treated as completed repository milestones
+Inspected HEAD: `8f0c3701bf3428ead9703d50bb8f318a6ca0d990`
+Worktree note: Phase 2P.1 is completed; uncommitted changes are present for the local-only shadow diagnostics feature and are ready for verification.
 
 ## Current Phase
 
 Current phase:
-- Phase 2R shadow-scoring and offline evaluation work is implemented provisionally
+- Phase 2P.1 End-to-End Discovery and Shadow Diagnostics is completed
 
 Last completed phase:
-- Phase 2R.3A multilingual shadow evaluation at commit `1e30565`
+- Phase 2P.1 integration at commit `8f0c3701` (with shadow diagnostics gated by default-disabled environment config)
 
 Immediate next phase:
-- collect blinded multilingual human judgments, validate reviewed snapshots, and compare bounded `cine-score-v2` weight candidates without changing production ranking
+- Collect blinded multilingual human judgments, validate reviewed snapshots, and compare bounded `cine-score-v2` weight candidates without changing production ranking
 
 Current blockers:
 - no approved path to activate `cine-score-v2` in production
@@ -41,6 +41,7 @@ Current blockers:
 | Regional cohort baseline builder | IMPLEMENTED_PROVISIONALLY | Commit `958b7ce`; offline baseline artifacts and gate status exist |
 | `cine-score-v2` shadow scoring prototype | IMPLEMENTED_PROVISIONALLY | Commit `5f6b8e0`; offline comparison only, production unaffected |
 | Multilingual shadow evaluation | COMPLETED | Commit `1e30565`; offline evaluation artifacts and deterministic diagnostics |
+| Phase 2P.1 End-to-End shadow diagnostics | COMPLETED | Gated local diagnostics compare v1 and v2, order remains v1 |
 | Multilingual human judgment workflow and bounded weight evaluation | IN_PROGRESS | Current worktree adds offline-only case generation, reviewed snapshot import, and candidate-weight comparison |
 
 ## Completed Milestones

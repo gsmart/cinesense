@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     active_ranking_version: str = Field(default="cine-score-v1", alias="CINESENSE_ACTIVE_RANKING_VERSION")
     shadow_ranking_version: str = Field(default="disabled", alias="CINESENSE_SHADOW_RANKING_VERSION")
     fallback_ranking_version: str = Field(default="cine-score-v1", alias="CINESENSE_FALLBACK_RANKING_VERSION")
+    cinesense_enable_shadow_diagnostics: bool = Field(default=False, alias="CINESENSE_ENABLE_SHADOW_DIAGNOSTICS")
+    cinesense_shadow_artifact_root: str = Field(default="/app/.local-artifacts/regional-shadow", alias="CINESENSE_SHADOW_ARTIFACT_ROOT")
+    cinesense_shadow_run_id: str = Field(default="20260719T194508Z", alias="CINESENSE_SHADOW_RUN_ID")
     api_timeout_seconds: float = 10.0
     wikidata_sparql_endpoint: str = Field(
         default="https://query.wikidata.org/sparql",

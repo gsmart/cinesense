@@ -4,26 +4,28 @@ Transparent, region-aware movie discovery with deterministic backend ranking, lo
 
 ## Current Status
 
-As of July 19, 2026, `cineSense` is past Phase 1. The committed repository implements:
+As of July 20, 2026, `cineSense` has completed Phase 2P.1. The repository implements:
 
 - exact movie lookup with disambiguation
 - seed-based recommendations
 - structured discovery API and `/discover` UI
 - natural-language discovery interpretation behind an optional backend LLM boundary
 - versioned ranking dispatch with production pinned to `cine-score-v1`
+- local-development-only shadow diagnostics comparing `cine-score-v1` with `cine-score-v2` in lookup and discovery results (gated by configuration)
 - offline regional evidence sampling, validation, cohort baseline building, and `cine-score-v2` shadow scoring prototypes
 
 Production ranking version:
-- `cine-score-v1`
+- `cine-score-v1` (authoritative)
 
 Current non-production shadow version:
-- `cine-score-v2-shadow-1`
+- `cine-score-v2-shadow-1` (shadow-only diagnostics)
 
 Experimental or provisional capabilities:
 - natural-language discovery requires explicit `CINESENSE_LLM_*` configuration and can return controlled interpreter-unavailable responses
+- shadow diagnostics are enabled locally by setting `CINESENSE_ENABLE_SHADOW_DIAGNOSTICS=true` and `NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS=true`
 - regional evidence, review gates, cohort baselines, and shadow scoring run offline through scripts and JSON/JSONL artifacts; they are not production API features
 - blinded regional human-judgment case generation, review import, and bounded `cine-score-v2` weight evaluation run offline through scripts and local artifacts only
-- `cine-score-v2` is not active for user-facing ordering
+- `cine-score-v2` is not active for user-facing ordering or pagination
 
 ## Runtime Architecture
 
@@ -37,8 +39,9 @@ Experimental or provisional capabilities:
 1. Copy `.env.example` to `.env`.
 2. Set `TMDB_API_READ_ACCESS_TOKEN` for lookup, recommendations, and discovery.
 3. Set `CINESENSE_LLM_*` only if you want natural-language discovery enabled locally.
-4. Run `./scripts/start-phase-1a.sh` from the repo root.
-5. Open `http://localhost:3000` or `http://localhost:3000/discover`.
+4. Set `CINESENSE_ENABLE_SHADOW_DIAGNOSTICS=true` and `NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS=true` in your shell environment to enable local shadow diagnostics.
+5. Run `./scripts/start-phase-1a.sh` from the repo root or use `docker compose up -d`.
+6. Open `http://localhost:3000` or `http://localhost:3000/discover`.
 
 ## Core Verification
 

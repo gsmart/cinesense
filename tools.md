@@ -127,3 +127,6 @@ Boundary:
 - application code may persist canonical movie and observation data in PostgreSQL
 - offline analysis scripts write file artifacts, not production DB rows
 - no tool in the committed repo stages, commits, or publishes data externally
+- local-development Docker container configuration options:
+  - `CINESENSE_ENABLE_SHADOW_DIAGNOSTICS` (FastAPI backend): enables API shadow comparison diagnostics
+  - `NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS` (Next.js frontend): controls UI diagnostics toggle visibility

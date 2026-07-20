@@ -93,7 +93,8 @@ This workflow does not:
 
 ## Activation State
 
-- active production scorer: `cine-score-v1`
-- shadow scorer in product APIs: disabled
-- offline shadow experiment: implemented
-- production migration path for `cine-score-v2`: not approved
+- active production scorer: `cine-score-v1` (authoritative for ordering)
+- shadow scorer in product APIs: available only as gated local-development diagnostics comparison (`CINESENSE_ENABLE_SHADOW_DIAGNOSTICS=true`)
+- offline shadow experiment: implemented and verified
+- production migration path for `cine-score-v2`: not approved, remains in shadow diagnostics mode only
+- ordering invariance: enabling shadow diagnostics does not alter the result order of lookup, recommendation, or discovery endpoints, which are still sorted by `cine-score-v1`

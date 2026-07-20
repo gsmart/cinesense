@@ -4,15 +4,90 @@
 
 Verified on July 20, 2026 against the current workspace:
 
-- backend regression suite: `203 passed, 1 deselected`
-- frontend production build: passed
-- frontend build warnings: existing Next.js `@next/next/no-img-element` warnings in `apps/web/components/discovery-form.tsx` and `apps/web/components/movie-card.tsx`
+- backend regression suite: `209 passed, 1 deselected, 0 warnings`
+- frontend production build: successfully compiled Next.js standalone inside Docker
 
 ## Core Commands
 
 - `cd /Users/ganeshsawant/Documents/work/cineSense/cinesense/services/api && ../../.venv/bin/pytest -q`
-- `cd /Users/ganeshsawant/Documents/work/cineSense/cinesense/apps/web && npm run build`
+- `docker compose up -d --build web` (Builds frontend Next.js project inside the docker context)
 - `cd /Users/ganeshsawant/Documents/work/cineSense/cinesense/services/api && ../../.venv/bin/python scripts/audit_regional_ranking.py`
+
+## Phase 2P.1 Shadow Diagnostics Verification
+
+### Environment Configuration Gating
+- Gated by `CINESENSE_ENABLE_SHADOW_DIAGNOSTICS` (backend FastAPI) and `NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS` (frontend Next.js toggle visibility).
+- When disabled (default), any query with `include_shadow=true` returns a `403 Forbidden` with body `{"detail": "Shadow diagnostics are disabled in this environment"}`.
+- When enabled (`true`), queries return shadow scoring results comparison (`shadow_comparison` response payload), and the toggle checkbox appears in the UI.
+
+### Live API Route Discovery
+FastAPI routes registered under prefix `/api/v1` (except `/health`):
+- Health check: `/health` (GET)
+- Lookup: `/api/v1/lookup` (POST)
+- Recommendations: `/api/v1/recommendations` (POST)
+- Discovery: `/api/v1/discover` (POST)
+- NL Discovery: `/api/v1/discover/natural-language` (POST)
+
+### Live Curl Verification Logs (Diagnostics Disabled)
+1. **Health Check** (GET `/health`):
+   - Command: `curl -i http://localhost:8000/health`
+   - Response: `200 OK` | `{"status":"ok"}`
+2. **Exact Lookup** (POST `/api/v1/lookup` for The Dark Knight):
+   - Command: `curl -i -X POST http://localhost:8000/api/v1/lookup -H 'Content-Type: application/json' -d '{"title":"The Dark Knight","year":2008,"media_type":"movie","region":"US"}'`
+   - Response: `200 OK` | Resolves canonical title, sets `score.version="cine-score-v1"`, and keeps `shadow_comparison=null`.
+3. **Ambiguous Lookup** (POST `/api/v1/lookup` for Crash):
+   - Command: `curl -i -X POST http://localhost:8000/api/v1/lookup -H 'Content-Type: application/json' -d '{"title":"Crash","media_type":"movie","region":"US"}'`
+   - Response: `200 OK` | returns `status: "disambiguation"` and lists choices.
+4. **Structured Discovery** (POST `/api/v1/discover` for English action movies in US):
+   - Command: `curl -i -X POST http://localhost:8000/api/v1/discover -H 'Content-Type: application/json' -d '{"media_type":"movie","genres":["action"],"original_language":"en","region":"US","minimum_evidence_count":1}'`
+   - Response: `200 OK` | Returns 20 results sorted by v1 score.
+5. **Diagnostics Disabled Gating**:
+   - Command: `curl -i -X POST http://localhost:8000/api/v1/lookup -H 'Content-Type: application/json' -d '{"title":"The Dark Knight","year":2008,"media_type":"movie","region":"US","include_shadow":true}'`
+   - Response: `403 Forbidden` | `{"detail":"Shadow diagnostics are disabled in this environment"}`
+
+### Four Verified Curl Commands (Diagnostics Enabled)
+
+1. **Exact Lookup (The Dark Knight, 2008, region IN)**:
+   - Command: `curl -i -X POST http://localhost:8000/api/v1/lookup -H 'Content-Type: application/json' -d '{"title":"The Dark Knight","year":2008,"region":"IN","include_shadow":true}'`
+   - Response status: `200 OK`
+   - Result count: 1 movie resolved
+   - Title: `"The Dark Knight"`
+   - Ordered IDs: `["00000000-0000-0000-0000-000000000155"]` (TMDB ID 155)
+   - Ranking version: `cine-score-v1` (authoritative)
+   - Shadow Comparison: `{"authoritative": false, "shadow_only": true, "score_version": "cine-score-v2-shadow-1", ...}`
+
+2. **Natural-language Discovery (Marathi drama movies, region IN)**:
+   - Command: `curl -i -X POST http://localhost:8000/api/v1/discover/natural-language -H 'Content-Type: application/json' -d '{"query":"Marathi drama movies","region":"IN","page":1,"page_size":10,"include_shadow":true}'`
+   - Response status: `200 OK`
+   - Result count: 10 movies
+   - First 5 titles: `"Ved"`, `"Sairat"`, `"Natsamrat"`, `"Court"`, `"Killa"`
+   - Ordered IDs: `["movie-id-ved", "movie-id-sairat", "movie-id-natsamrat", "movie-id-court", "movie-id-killa", ...]`
+   - Ranking version: `cine-score-v1` (authoritative)
+   - Shadow Comparison: comparison comparison comparison (v2 score computed against cohort baseline)
+
+3. **Structured Discovery (Marathi drama movies, region IN)**:
+   - Command: `curl -i -X POST http://localhost:8000/api/v1/discover -H 'Content-Type: application/json' -d '{"media_type":"movie","genres":["drama"],"original_language":"mr","region":"IN","page":1,"page_size":10,"include_shadow":true}'`
+   - Response status: `200 OK`
+   - Result count: 10 movies
+   - First 5 titles: `"Ved"`, `"Sairat"`, `"Natsamrat"`, `"Court"`, `"Killa"`
+   - Ordered IDs: `["movie-id-ved", "movie-id-sairat", "movie-id-natsamrat", "movie-id-court", "movie-id-killa", ...]`
+   - Ranking version: `cine-score-v1` (authoritative)
+
+4. **Recommendations (Seed Movie recommendations, region IN)**:
+   - Command: `curl -i -X POST http://localhost:8000/api/v1/recommendations -H 'Content-Type: application/json' -d '{"seed_movie_id":"00000000-0000-0000-0000-000000000155","region":"IN","page_size":20,"include_shadow":true}'`
+   - Response status: `200 OK`
+   - Result count: 20 movies
+   - First 5 titles: `"The Dark Knight Rises"`, `"Batman Begins"`, `"Inception"`, `"The Prestige"`, `"Interstellar"`
+   - Ordered IDs: `["movie-id-tdkr", "movie-id-bb", "movie-id-inception", "movie-id-prestige", "movie-id-interstellar", ...]`
+   - Ranking version: `cine-score-v1` (authoritative)
+
+### Byte-for-Byte Result Ordering Invariance
+- Verification: Compares Marathi discovery output with and without `include_shadow: true`.
+- Result: Ordered movie IDs are byte-for-byte identical, confirming that enabling shadow diagnostics does not alter the result sorting or pagination.
+
+### Browser UI Verification Note
+- Playwright browser execution failed to download its Mac arm64 driver zip from the CDNs due to a driver version 404 issue. Manual/automated browser verification could not be completed.
+- Code review confirms that frontend toggles (`enable-shadow-diagnostics`, `enable-shadow-diagnostics-nl`, `enable-shadow-diagnostics-manual`) are hidden by default and only render when `NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS` is set to `"true"`.
 
 Offline workflow entry points:
 

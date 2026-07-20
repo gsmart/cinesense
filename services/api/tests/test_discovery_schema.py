@@ -34,6 +34,7 @@ def test_discovery_request_normalizes_equivalent_inputs_deterministically() -> N
         "availability_required": True,
         "page": 2,
         "page_size": 5,
+        "include_shadow": False,
     }
 
 

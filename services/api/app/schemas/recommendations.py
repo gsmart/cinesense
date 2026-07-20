@@ -3,11 +3,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, AliasChoices
 
+from app.schemas.lookup import ShadowComparisonResponse
+
 
 class RecommendationsRequest(BaseModel):
     seed_movie_id: UUID
     region: str | None = Field(default=None, min_length=2, max_length=2)
     page_size: int = Field(default=20, ge=1, le=20)
+    include_shadow: bool = Field(default=False)
 
 
 class SeedMovieResponse(BaseModel):
@@ -43,6 +46,7 @@ class RecommendationResponse(BaseModel):
     missing_signals: list[str]
     provenance: RecommendationProvenanceResponse
     freshness: dict[str, str]
+    shadow_comparison: ShadowComparisonResponse | None = None
 
 
 class RecommendationPageMetadata(BaseModel):
