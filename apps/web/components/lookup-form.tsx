@@ -2,67 +2,49 @@
 
 import type { CSSProperties, FormEvent } from "react";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { MovieCard, RecommendationsPanel } from "@/components/movie-card";
 import type { LookupResponse, RecommendationsResponse } from "@/lib/types";
 
-const initialResponse: LookupResponse | null = null;
-
-function buildAchievements(
-  response: LookupResponse | null,
-  recommendationStatus: "idle" | "loading" | "error" | "success",
-  recommendations: RecommendationsResponse | null,
-) {
-  const achievements = [
-    { label: "Exact lookup", value: response?.status === "resolved" ? "Working" : "Ready" },
-    {
-      label: "Data source",
-      value:
-        response?.status === "resolved"
-          ? response.source === "local_cache"
-            ? "Warm cache reused"
-            : "Provider fetch stored"
-          : "PostgreSQL first",
-    },
-    {
-      label: "Score engine",
-      value: response?.status === "resolved" ? response.movie?.score.version ?? "cine-score-v1" : "cine-score-v1",
-    },
-    {
-      label: "Recommendations",
-      value:
-        recommendationStatus === "success"
-          ? `${recommendations?.page.returned_count ?? 0} ranked results`
-          : recommendationStatus === "loading"
-            ? "Ranking in progress"
-            : "On demand",
-    },
-  ];
-
-  if (response?.status === "disambiguation") {
-    achievements[0] = { label: "Disambiguation", value: `${response.disambiguation_choices.length} choices` };
-  }
-
-  return achievements;
-}
-
 export function LookupForm() {
+  const router = useRouter();
+
+  // Natural Language Search State
+  const [nlQuery, setNlQuery] = useState("");
+
+  // Exact Lookup State
+  const [showExact, setShowExact] = useState(false);
   const [title, setTitle] = useState("");
   const [year, setYear] = useState("");
   const [region, setRegion] = useState("");
   const [includeShadow, setIncludeShadow] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
-  const [response, setResponse] = useState<LookupResponse | null>(initialResponse);
+  const [response, setResponse] = useState<LookupResponse | null>(null);
   const [recommendationStatus, setRecommendationStatus] = useState<"idle" | "loading" | "error" | "success">("idle");
   const [recommendationError, setRecommendationError] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<RecommendationsResponse | null>(null);
 
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
   const showDiagnosticsToggle = process.env.NEXT_PUBLIC_CINESENSE_ENABLE_SHADOW_DIAGNOSTICS === "true";
-  const achievements = buildAchievements(response, recommendationStatus, recommendations);
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+  const exampleChips = [
+    "Marathi crime thrillers",
+    "Movies like Drishyam",
+    "Malayalam dramas after 2015",
+    "Fast-paced survival movies",
+    "Tamil psychological thrillers",
+  ];
+
+  function onNLSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (nlQuery.trim()) {
+      router.push(`/discover?q=${encodeURIComponent(nlQuery.trim())}`);
+    }
+  }
+
+  async function onExactSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setStatus("loading");
     setError(null);
@@ -96,9 +78,7 @@ export function LookupForm() {
   }
 
   async function fetchRecommendations() {
-    if (response?.status !== "resolved" || !response.movie) {
-      return;
-    }
+    if (response?.status !== "resolved" || !response.movie) return;
 
     setRecommendationStatus("loading");
     setRecommendationError(null);
@@ -129,90 +109,120 @@ export function LookupForm() {
   return (
     <section style={styles.shell}>
       <div style={styles.hero}>
-        <p style={styles.kicker}>Phase 1A MVP</p>
-        <h1 style={styles.title}>Exact movie lookup, local first.</h1>
-        <p style={styles.copy}>
-          Search by exact title, optionally narrow by year and region, and inspect what was cached,
-          what was fetched, and which signals are still missing.
+        <h1 style={styles.heroTitle}>What should you watch tonight?</h1>
+        <p style={styles.heroCopy}>
+          Search by title, mood, genre, language, year, or a movie you already love.
         </p>
-      </div>
 
-      <section style={styles.achievementPanel}>
-        <div style={styles.achievementHeader}>
-          <p style={styles.kicker}>Achievements</p>
-          <p style={styles.achievementCopy}>Surface the system wins directly in the UI, not just in the docs.</p>
-        </div>
-        <div style={styles.achievementGrid}>
-          {achievements.map((achievement) => (
-            <article key={achievement.label} style={styles.achievementCard}>
-              <p style={styles.achievementLabel}>{achievement.label}</p>
-              <strong style={styles.achievementValue}>{achievement.value}</strong>
-            </article>
+        <form onSubmit={onNLSubmit} style={styles.searchForm}>
+          <input
+            type="text"
+            placeholder="e.g. Marathi crime thrillers from the 2010s"
+            value={nlQuery}
+            onChange={(e) => setNlQuery(e.target.value)}
+            style={styles.searchInput}
+          />
+          <button type="submit" style={styles.searchButton}>Discover</button>
+        </form>
+
+        <div style={styles.chipList}>
+          {exampleChips.map((chip) => (
+            <button
+              key={chip}
+              type="button"
+              style={styles.chip}
+              onClick={() => {
+                setNlQuery(chip);
+                router.push(`/discover?q=${encodeURIComponent(chip)}`);
+              }}
+            >
+              {chip}
+            </button>
           ))}
         </div>
-      </section>
+      </div>
 
-      <form onSubmit={onSubmit} style={styles.form}>
-        <label style={styles.field}>
-          <span>Movie title</span>
-          <input
-            required
-            placeholder="e.g. The Dark Knight or Ved"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            style={styles.input}
-          />
-        </label>
-        <label style={styles.field}>
-          <span>Release year (optional)</span>
-          <input
-            type="number"
-            min={1888}
-            max={2100}
-            placeholder="e.g. 2008"
-            value={year}
-            onChange={(event) => setYear(event.target.value)}
-            style={styles.input}
-          />
-        </label>
-        <label style={styles.field}>
-          <span>Region</span>
-          <input
-            maxLength={2}
-            value={region}
-            onChange={(event) => setRegion(event.target.value.toUpperCase())}
-            style={styles.input}
-          />
-        </label>
-        <label style={styles.field}>
-          <span>Media type</span>
-          <select value="movie" disabled style={styles.input}>
-            <option value="movie">movie</option>
-          </select>
-        </label>
-        {showDiagnosticsToggle && (
-          <label style={{ ...styles.field, display: "flex", flexDirection: "row", alignItems: "center", gap: 10, cursor: "pointer", gridColumn: "span 2", minHeight: 48 }}>
-            <input
-              id="enable-shadow-diagnostics"
-              type="checkbox"
-              checked={includeShadow}
-              onChange={(event) => setIncludeShadow(event.target.checked)}
-              style={{ width: 20, height: 20, cursor: "pointer" }}
-            />
-            <span style={{ fontWeight: 500, color: "var(--text)" }}>Enable Shadow Diagnostics (v2)</span>
-          </label>
-        )}
-        <button type="submit" style={styles.button} disabled={status === "loading"}>
-          {status === "loading" ? "Looking up..." : "Lookup"}
+      <div style={styles.toggleContainer}>
+        <button
+          type="button"
+          onClick={() => setShowExact(!showExact)}
+          style={styles.exactToggle}
+        >
+          {showExact ? "Hide exact title search" : "Looking for a specific exact title?"}
         </button>
-      </form>
+      </div>
 
-      {error ? <p style={styles.error}>{error}</p> : null}
+      {showExact && (
+        <form onSubmit={onExactSubmit} style={styles.form}>
+          <div style={styles.formHeader}>
+            <h2 style={styles.formTitle}>Exact Title Lookup</h2>
+          </div>
+          <div style={styles.fieldGrid}>
+            <label style={styles.field}>
+              <span>Movie title</span>
+              <input
+                required
+                placeholder="e.g. Faster Fene"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                style={styles.input}
+              />
+            </label>
+            <label style={styles.field}>
+              <span>Release year (optional)</span>
+              <input
+                type="number"
+                min={1888}
+                max={2100}
+                placeholder="e.g. 2017"
+                value={year}
+                onChange={(event) => setYear(event.target.value)}
+                style={styles.input}
+              />
+            </label>
+            <label style={styles.field}>
+              <span>Region</span>
+              <input
+                maxLength={2}
+                value={region}
+                onChange={(event) => setRegion(event.target.value.toUpperCase())}
+                style={styles.input}
+                placeholder="e.g. IN"
+              />
+            </label>
+            <label style={styles.field}>
+              <span>Media type</span>
+              <select value="movie" disabled style={styles.input}>
+                <option value="movie">movie</option>
+              </select>
+            </label>
+          </div>
+          {showDiagnosticsToggle && (
+            <label style={{ ...styles.field, display: "flex", flexDirection: "row", alignItems: "center", gap: 10, cursor: "pointer", marginTop: 16 }}>
+              <input
+                id="enable-shadow-diagnostics"
+                type="checkbox"
+                checked={includeShadow}
+                onChange={(event) => setIncludeShadow(event.target.checked)}
+                style={{ width: 20, height: 20, cursor: "pointer" }}
+              />
+              <span style={{ fontWeight: 500, color: "var(--text)" }}>Enable Shadow Diagnostics (v2)</span>
+            </label>
+          )}
+          <div style={styles.formActions}>
+            <button type="submit" style={styles.button} disabled={status === "loading"}>
+              {status === "loading" ? "Looking up..." : "Lookup"}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {error && <p style={styles.error}>{error}</p>}
 
       {response?.status === "disambiguation" ? (
         <section style={styles.resultPanel}>
-          <h2 style={styles.subheading}>Disambiguation needed</h2>
-          <p style={styles.copy}>Multiple exact-title matches exist for `{response.normalized_title}`.</p>
+          <h2 style={{ marginTop: 0 }}>Disambiguation needed</h2>
+          <p style={{ color: "var(--muted)" }}>Multiple exact-title matches exist for `{response.normalized_title}`.</p>
           <ul style={styles.choiceList}>
             {response.disambiguation_choices.map((choice) => (
               <li key={`${choice.source}-${choice.source_movie_id}`} style={styles.choice}>
@@ -244,123 +254,168 @@ export function LookupForm() {
 
 const styles: Record<string, CSSProperties> = {
   shell: {
-    maxWidth: 980,
+    maxWidth: 1024,
     margin: "0 auto",
-    display: "grid",
-    gap: 24,
+    display: "flex",
+    flexDirection: "column",
+    gap: 32,
+    padding: "40px 0",
   },
   hero: {
-    padding: "32px 32px 12px",
-  },
-  achievementPanel: {
-    display: "grid",
-    gap: 18,
-    padding: "0 32px",
-  },
-  achievementHeader: {
+    textAlign: "center",
+    padding: "64px 20px 48px",
     display: "flex",
-    justifyContent: "space-between",
-    gap: 16,
-    alignItems: "end",
-    flexWrap: "wrap",
+    flexDirection: "column",
+    alignItems: "center",
   },
-  achievementCopy: {
-    margin: 0,
+  heroTitle: {
+    margin: "0 0 16px",
+    fontSize: "clamp(2.5rem, 6vw, 4.5rem)",
+    fontWeight: 800,
+    letterSpacing: "-0.03em",
+    lineHeight: 1.1,
+  },
+  heroCopy: {
+    margin: "0 0 40px",
+    fontSize: "clamp(1.1rem, 2vw, 1.4rem)",
     color: "var(--muted)",
+    maxWidth: 600,
   },
-  achievementGrid: {
-    display: "grid",
-    gap: 14,
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  },
-  achievementCard: {
-    borderRadius: 22,
-    padding: "18px 20px",
-    background: "linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(248,232,213,0.92) 100%)",
-    border: "1px solid rgba(141,46,22,0.14)",
-    boxShadow: "0 18px 40px rgba(86, 42, 16, 0.08)",
-  },
-  achievementLabel: {
-    margin: 0,
-    color: "var(--accent)",
-    textTransform: "uppercase",
-    letterSpacing: "0.12em",
-    fontSize: 11,
-  },
-  achievementValue: {
-    display: "block",
-    marginTop: 8,
-    fontSize: "clamp(1rem, 2vw, 1.25rem)",
-  },
-  kicker: {
-    margin: 0,
-    color: "var(--accent)",
-    letterSpacing: "0.16em",
-    textTransform: "uppercase",
-    fontSize: 12,
-  },
-  title: {
-    margin: "10px 0 12px",
-    fontSize: "clamp(2.4rem, 5vw, 4.8rem)",
-    lineHeight: 0.95,
-  },
-  copy: {
-    margin: 0,
+  searchForm: {
+    display: "flex",
+    width: "100%",
     maxWidth: 720,
+    gap: 8,
+    background: "rgba(255,255,255,0.05)",
+    padding: 8,
+    borderRadius: 999,
+    border: "1px solid var(--line)",
+    boxShadow: "0 16px 32px rgba(0,0,0,0.4)",
+    backdropFilter: "blur(20px)",
+  },
+  searchInput: {
+    flex: 1,
+    background: "transparent",
+    border: "none",
+    color: "var(--text)",
+    padding: "0 24px",
+    fontSize: "1.1rem",
+    outline: "none",
+  },
+  searchButton: {
+    padding: "16px 36px",
+    borderRadius: 999,
+    border: "none",
+    background: "var(--accent)",
+    color: "#fff",
+    fontSize: "1.1rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "transform 0.2s, box-shadow 0.2s",
+  },
+  chipList: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 12,
+    justifyContent: "center",
+    marginTop: 32,
+    maxWidth: 800,
+  },
+  chip: {
+    padding: "8px 16px",
+    borderRadius: 999,
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid var(--line)",
+    color: "var(--text)",
+    fontSize: 14,
+    cursor: "pointer",
+    transition: "background 0.2s, border-color 0.2s",
+  },
+  toggleContainer: {
+    display: "flex",
+    justifyContent: "center",
+  },
+  exactToggle: {
+    background: "none",
+    border: "none",
     color: "var(--muted)",
-    lineHeight: 1.5,
+    textDecoration: "underline",
+    cursor: "pointer",
+    fontSize: 15,
   },
   form: {
-    display: "grid",
-    gap: 16,
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    display: "flex",
+    flexDirection: "column",
+    gap: 24,
     padding: 32,
-    borderRadius: 28,
+    borderRadius: 24,
     background: "var(--panel)",
+    border: "1px solid var(--line)",
     boxShadow: "var(--shadow)",
     backdropFilter: "blur(20px)",
   },
-  field: {
+  formHeader: {
+    marginBottom: 8,
+  },
+  formTitle: {
+    margin: 0,
+    fontSize: 24,
+    fontWeight: 600,
+  },
+  fieldGrid: {
     display: "grid",
+    gap: 16,
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+  },
+  field: {
+    display: "flex",
+    flexDirection: "column",
     gap: 8,
     color: "var(--muted)",
+    fontSize: 14,
   },
   input: {
     minHeight: 48,
-    borderRadius: 16,
+    borderRadius: 12,
     border: "1px solid var(--line)",
-    background: "rgba(255,255,255,0.88)",
-    padding: "0 14px",
+    background: "rgba(0,0,0,0.2)",
+    padding: "0 16px",
     color: "var(--text)",
+  },
+  formActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    marginTop: 8,
   },
   button: {
     minHeight: 48,
     borderRadius: 999,
-    border: 0,
-    background: "linear-gradient(135deg, #8d2e16 0%, #c85f33 100%)",
-    color: "#fff8f0",
-    padding: "0 24px",
+    border: "none",
+    background: "var(--accent)",
+    color: "#fff",
+    padding: "0 32px",
+    fontWeight: 600,
     cursor: "pointer",
-    alignSelf: "end",
   },
   error: {
+    color: "#ff6b6b",
+    background: "rgba(255,107,107,0.1)",
+    padding: "16px 24px",
+    borderRadius: 12,
+    border: "1px solid rgba(255,107,107,0.2)",
     margin: 0,
-    color: "#872017",
   },
   resultPanel: {
-    borderRadius: 28,
+    borderRadius: 24,
     background: "var(--panel)",
-    boxShadow: "var(--shadow)",
+    border: "1px solid var(--line)",
     padding: 32,
   },
-  subheading: {
-    marginTop: 0,
-  },
   choiceList: {
-    margin: 0,
-    paddingLeft: 20,
+    margin: "16px 0 0",
+    paddingLeft: 24,
     display: "grid",
-    gap: 8,
+    gap: 12,
   },
   choice: {
     color: "var(--text)",

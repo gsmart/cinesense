@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-
+import { CollapsiblePanel } from "./collapsible-panel";
 import type { LookupResponse, RecommendationsResponse } from "@/lib/types";
 
 export function MovieCard({
@@ -16,117 +16,119 @@ export function MovieCard({
   }
 
   const { movie } = response;
+  const isCache = response.source === "local_cache";
 
   return (
-    <section style={styles.card}>
-      <div style={styles.headline}>
-        <div>
-          <p style={styles.eyebrow}>{response.source === "local_cache" ? "Warm cache" : "Fresh provider fetch"}</p>
-          <h2 style={styles.title}>
-            {movie.canonical_title} {movie.release_year ? `(${movie.release_year})` : ""}
-          </h2>
-          <p style={styles.meta}>
-            {movie.media_type} · {movie.original_language ?? "unknown language"} · {movie.runtime_minutes ?? "?"} min
-          </p>
+    <section style={styles.cinematicCard}>
+      <div style={styles.detailLayout}>
+        <div style={styles.posterColumn}>
+          {movie.poster_url ? (
+            <img src={movie.poster_url} alt={`${movie.canonical_title} poster`} style={styles.detailPoster} />
+          ) : (
+            <div style={styles.detailPosterFallback}>No poster available</div>
+          )}
         </div>
-        <div style={styles.score}>
-          <span style={styles.scoreLabel}>{movie.score.version}</span>
-          <strong>{movie.score.total.toFixed(2)}</strong>
-        </div>
-      </div>
-
-      <p style={styles.overview}>{movie.overview || "No overview was returned."}</p>
-
-      <div style={styles.grid}>
-        <article style={styles.panel}>
-          <h3 style={styles.sectionTitle}>Score Breakdown</h3>
-          <ul style={styles.list}>
-            {Object.entries(movie.score.components).map(([key, value]) => (
-              <li key={key} style={styles.item}>
-                <span>{key}</span>
-                <strong>{value === null ? "missing" : value.toFixed(2)}</strong>
-              </li>
-            ))}
-          </ul>
-        </article>
-
-        <article style={styles.panel}>
-          <h3 style={styles.sectionTitle}>Freshness</h3>
-          <ul style={styles.list}>
-            {Object.entries(movie.freshness).map(([key, value]) => (
-              <li key={key} style={styles.item}>
-                <span>{key}</span>
-                <strong>{value}</strong>
-              </li>
-            ))}
-          </ul>
-        </article>
-      </div>
-
-      {movie.shadow_comparison && (
-        <div style={{ ...styles.grid, marginTop: 16 }}>
-          <article style={{ ...styles.panel, gridColumn: "span 2", border: "1px dashed var(--accent)", background: "rgba(141,46,22,0.05)" }}>
-            <h3 style={{ ...styles.sectionTitle, color: "var(--accent)" }}>Shadow Diagnostics (cine-score-v2)</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginTop: 12 }}>
-              <div>
-                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Shadow Version:</strong> {movie.shadow_comparison.score_version}</p>
-                <p style={{ margin: "2px 0", fontSize: 13 }}>
-                  <strong>V2 Score:</strong> {movie.shadow_comparison.v2_score !== null ? movie.shadow_comparison.v2_score.toFixed(2) : "N/A"} (Authoritative: {movie.shadow_comparison.authoritative ? "Yes" : "No"})
-                </p>
-                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Score Delta:</strong> {movie.shadow_comparison.score_delta !== null ? (movie.shadow_comparison.score_delta > 0 ? `+${movie.shadow_comparison.score_delta}` : movie.shadow_comparison.score_delta) : "N/A"}</p>
-              </div>
-              <div>
-                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Evidence Gate:</strong> {movie.shadow_comparison.evidence_gate || "N/A"}</p>
-                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Human Review:</strong> {movie.shadow_comparison.review_status || "PENDING"}</p>
-                <p style={{ margin: "2px 0", fontSize: 13 }}><strong>Activation Eligible:</strong> {movie.shadow_comparison.activation_eligible ? "Yes" : "No"}</p>
-                {movie.shadow_comparison.ineligible_reason && (
-                  <p style={{ margin: "2px 0", fontSize: 13, color: "var(--accent)" }}><strong>Ineligible Reason:</strong> {movie.shadow_comparison.ineligible_reason}</p>
-                )}
-              </div>
+        <div style={styles.infoColumn}>
+          <div style={styles.headline}>
+            <div>
+              <h2 style={styles.title}>
+                {movie.canonical_title} {movie.release_year ? <span style={{ color: "var(--muted)", fontWeight: 400 }}>({movie.release_year})</span> : ""}
+              </h2>
+              <p style={styles.meta}>
+                {movie.runtime_minutes ? `${movie.runtime_minutes} min` : "Unknown runtime"} • {movie.original_language?.toUpperCase() || "UN"}
+              </p>
             </div>
-          </article>
-        </div>
-      )}
+            <div style={styles.scoreBadge}>
+              <strong style={styles.scoreValue}>{movie.score.total.toFixed(2)}</strong>
+              <span style={styles.scoreLabel}>CineSense</span>
+            </div>
+          </div>
+          <p style={styles.overview}>{movie.overview || "No overview available."}</p>
 
-      <div style={styles.grid}>
-        <article style={styles.panel}>
-          <h3 style={styles.sectionTitle}>Provenance</h3>
-          <p style={styles.small}>Source: {movie.source}</p>
-          <p style={styles.small}>Source ID: {movie.source_movie_id}</p>
-          <p style={styles.small}>
-            Source URL:{" "}
-            {movie.source_url ? (
-              <a href={movie.source_url} target="_blank" rel="noreferrer">
-                {movie.source_url}
-              </a>
-            ) : (
-              "unavailable"
+          {onFindSimilar ? (
+            <div style={styles.actionRow}>
+              <button
+                type="button"
+                style={styles.primaryAction}
+                disabled={recommendationStatus === "loading"}
+                onClick={onFindSimilar}
+              >
+                {recommendationStatus === "loading" ? "Finding similar movies..." : "Find similar movies"}
+              </button>
+            </div>
+          ) : null}
+
+          <div style={styles.collapsibleSections}>
+            <CollapsiblePanel title="Score explanation">
+              <ul style={styles.list}>
+                {Object.entries(movie.score.components).map(([key, value]) => (
+                  <li key={key} style={styles.item}>
+                    <span>{key}</span>
+                    <strong>{value === null ? "missing" : value.toFixed(2)}</strong>
+                  </li>
+                ))}
+              </ul>
+            </CollapsiblePanel>
+
+            <CollapsiblePanel title="Freshness">
+              <ul style={styles.list}>
+                <li style={styles.item}>
+                  <span>Data Source</span>
+                  <strong>{isCache ? "Local Cache" : "Fresh Provider Fetch"}</strong>
+                </li>
+                {Object.entries(movie.freshness).map(([key, value]) => (
+                  <li key={key} style={styles.item}>
+                    <span>{key}</span>
+                    <strong>{value}</strong>
+                  </li>
+                ))}
+              </ul>
+            </CollapsiblePanel>
+
+            <CollapsiblePanel title="Provenance & Aliases">
+              <p style={styles.small}><strong>Source:</strong> {movie.source} ({movie.source_movie_id})</p>
+              {movie.source_url && (
+                <p style={styles.small}>
+                  <strong>URL:</strong> <a href={movie.source_url} target="_blank" rel="noreferrer" style={styles.link}>{movie.source_url}</a>
+                </p>
+              )}
+              {movie.aliases.length > 0 && (
+                <p style={styles.small}><strong>Aliases:</strong> {movie.aliases.join(", ")}</p>
+              )}
+            </CollapsiblePanel>
+
+            <CollapsiblePanel title="Missing Signals">
+              <p style={styles.small}>
+                {movie.missing_signals.length ? movie.missing_signals.join(", ") : "None"}
+              </p>
+            </CollapsiblePanel>
+
+            {movie.shadow_comparison && (
+              <CollapsiblePanel title="Developer ranking diagnostics" headerColor="var(--accent)">
+                <div style={styles.diagnosticGrid}>
+                  <div>
+                    <p style={styles.small}><strong>Shadow Version:</strong> {movie.shadow_comparison.score_version}</p>
+                    <p style={styles.small}>
+                      <strong>V2 Score:</strong> {movie.shadow_comparison.v2_score !== null ? movie.shadow_comparison.v2_score.toFixed(2) : "N/A"}
+                    </p>
+                    <p style={styles.small}>
+                      <strong>Authoritative:</strong> {movie.shadow_comparison.authoritative ? "Yes" : "No"}
+                    </p>
+                  </div>
+                  <div>
+                    <p style={styles.small}><strong>Evidence Gate:</strong> {movie.shadow_comparison.evidence_gate || "N/A"}</p>
+                    <p style={styles.small}><strong>Human Review:</strong> {movie.shadow_comparison.review_status || "PENDING"}</p>
+                    <p style={styles.small}><strong>Activation Eligible:</strong> {movie.shadow_comparison.activation_eligible ? "Yes" : "No"}</p>
+                    {movie.shadow_comparison.ineligible_reason && (
+                      <p style={{ ...styles.small, color: "var(--accent)" }}><strong>Ineligible:</strong> {movie.shadow_comparison.ineligible_reason}</p>
+                    )}
+                  </div>
+                </div>
+              </CollapsiblePanel>
             )}
-          </p>
-        </article>
-
-        <article style={styles.panel}>
-          <h3 style={styles.sectionTitle}>Missing Signals</h3>
-          <p style={styles.small}>
-            {movie.missing_signals.length ? movie.missing_signals.join(", ") : "None"}
-          </p>
-          <h3 style={styles.sectionTitle}>Aliases</h3>
-          <p style={styles.small}>{movie.aliases.join(", ")}</p>
-        </article>
-      </div>
-
-      {onFindSimilar ? (
-        <div style={styles.actionRow}>
-          <button
-            type="button"
-            style={styles.button}
-            disabled={recommendationStatus === "loading"}
-            onClick={onFindSimilar}
-          >
-            {recommendationStatus === "loading" ? "Finding similar movies..." : "Find similar movies"}
-          </button>
+          </div>
         </div>
-      ) : null}
+      </div>
     </section>
   );
 }
@@ -142,174 +144,72 @@ export function RecommendationsPanel({
   error: string | null;
   onRetry: () => void;
 }) {
-  if (status === "idle") {
-    return null;
-  }
+  if (status === "idle") return null;
 
   if (status === "loading") {
     return (
-      <section style={styles.card}>
-        <div style={styles.headline}>
-          <div>
-            <p style={styles.eyebrow}>Recommendations</p>
-            <h2 style={styles.title}>Finding similar movies…</h2>
-          </div>
+      <section style={styles.recommendationsSection}>
+        <h2 style={styles.sectionHeading}>Finding similar movies…</h2>
+        <div style={styles.posterGrid}>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} style={styles.skeletonCard} />
+          ))}
         </div>
-        <p style={styles.overview}>Requesting ranked recommendations from the backend.</p>
       </section>
     );
   }
 
   if (status === "error") {
     return (
-      <section style={styles.card}>
-        <div style={styles.headline}>
-          <div>
-            <p style={styles.eyebrow}>Recommendations</p>
-            <h2 style={styles.title}>Request failed</h2>
-          </div>
-        </div>
-        <p style={styles.overview}>{error ?? "Recommendations failed."}</p>
-        <div style={styles.actionRow}>
-          <button type="button" style={styles.button} onClick={onRetry}>
-            Retry
-          </button>
-        </div>
+      <section style={styles.recommendationsSection}>
+        <h2 style={styles.sectionHeading}>Recommendations failed</h2>
+        <p style={{ color: "var(--muted)" }}>{error}</p>
+        <button type="button" style={styles.secondaryAction} onClick={onRetry}>Retry</button>
       </section>
     );
   }
 
   if (!response || response.recommendations.length === 0) {
     return (
-      <section style={styles.card}>
-        <div style={styles.headline}>
-          <div>
-            <p style={styles.eyebrow}>Recommendations</p>
-            <h2 style={styles.title}>No similar movies returned</h2>
-          </div>
-        </div>
-        <p style={styles.overview}>The backend returned an empty first recommendation page for this seed movie.</p>
+      <section style={styles.recommendationsSection}>
+        <h2 style={styles.sectionHeading}>No similar movies returned</h2>
       </section>
     );
   }
 
   return (
-    <section style={styles.card}>
-      <div style={styles.headline}>
-        <div>
-          <p style={styles.eyebrow}>Recommendations</p>
-          <h2 style={styles.title}>Similar movies for {response.seed.canonical_title}</h2>
-          <p style={styles.meta}>
-            page {response.page.page} · requested {response.page.requested_page_size} · returned{" "}
-            {response.page.returned_count}
-          </p>
-        </div>
-      </div>
+    <section style={styles.recommendationsSection}>
+      <h2 style={styles.sectionHeading}>Similar movies for {response.seed.canonical_title}</h2>
 
-      <div style={styles.recommendationList}>
+      <div style={styles.posterGrid}>
         {response.recommendations.slice(0, 20).map((item) => (
-          <article key={item.movie.movie_id} style={styles.recommendationCard}>
-            <div style={styles.recommendationHeader}>
+          <article key={item.movie.movie_id} style={styles.posterCard}>
+            <div style={styles.posterWrapper}>
               {item.movie.poster_url ? (
                 <img
                   src={item.movie.poster_url}
                   alt={`${item.movie.canonical_title} poster`}
-                  style={styles.poster}
+                  style={styles.cardPoster}
                 />
               ) : (
-                <div style={styles.posterFallback}>No poster</div>
+                <div style={styles.cardPosterFallback}>No poster</div>
               )}
-              <div style={styles.recommendationIntro}>
-                <p style={styles.eyebrow}>Provider position {item.provider_position + 1}</p>
-                <h3 style={styles.recommendationTitle}>
-                  {item.movie.canonical_title} {item.movie.release_year ? `(${item.movie.release_year})` : ""}
-                </h3>
-                <p style={styles.meta}>
-                  {item.movie.original_language ?? "unknown language"} · {item.score_version} · {item.score.toFixed(2)}
-                </p>
+              <div style={styles.cardOverlay}>
+                <span style={styles.cardScore}>{item.score.toFixed(1)}</span>
               </div>
             </div>
 
-            <p style={styles.overview}>{item.movie.overview || "No overview was returned."}</p>
+            <div style={styles.cardInfo}>
+              <h3 style={styles.cardTitle}>{item.movie.canonical_title}</h3>
+              <p style={styles.cardMeta}>
+                {item.movie.release_year || "YYYY"} • {item.movie.original_language?.toUpperCase() || "UN"}
+              </p>
 
-            <div style={styles.grid}>
-              <article style={styles.panel}>
-                <h4 style={styles.sectionTitle}>Score Breakdown</h4>
-                <ul style={styles.list}>
-                  {Object.entries(item.score_components).map(([key, value]) => (
-                    <li key={key} style={styles.item}>
-                      <span>{key}</span>
-                      <strong>{value === null ? "missing" : value.toFixed(2)}</strong>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-
-              <article style={styles.panel}>
-                <h4 style={styles.sectionTitle}>Freshness</h4>
-                <ul style={styles.list}>
-                  {Object.entries(item.freshness).map(([key, value]) => (
-                    <li key={key} style={styles.item}>
-                      <span>{key}</span>
-                      <strong>{value}</strong>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            </div>
-
-            <div style={styles.grid}>
-              <article style={styles.panel}>
-                <h4 style={styles.sectionTitle}>Missing Signals</h4>
-                <p style={styles.small}>{item.missing_signals.length ? item.missing_signals.join(", ") : "None"}</p>
-              </article>
-
-              <article style={styles.panel}>
-                <h4 style={styles.sectionTitle}>Provenance</h4>
-                <p style={styles.small}>Source: {item.provenance.source}</p>
-                <p style={styles.small}>TMDB ID: {item.tmdb_source_movie_id}</p>
-                <p style={styles.small}>
-                  Source URL:{" "}
-                  {item.provenance.source_url ? (
-                    <a href={item.provenance.source_url} target="_blank" rel="noreferrer">
-                      {item.provenance.source_url}
-                    </a>
-                  ) : (
-                    "unavailable"
-                  )}
-                </p>
-              </article>
-            </div>
-
-            {item.shadow_comparison && (
-              <div style={{ ...styles.grid, marginTop: 12 }}>
-                <article style={{ ...styles.panel, gridColumn: "span 2", border: "1px dashed var(--accent)", background: "rgba(141,46,22,0.03)" }}>
-                  <h4 style={{ ...styles.sectionTitle, color: "var(--accent)" }}>Shadow Diagnostics (cine-score-v2)</h4>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginTop: 8 }}>
-                    <div>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Shadow Version:</strong> {item.shadow_comparison.score_version}</p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}>
-                        <strong>V2 Score:</strong> {item.shadow_comparison.v2_score !== null ? item.shadow_comparison.v2_score.toFixed(2) : "N/A"}
-                      </p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}>
-                        <strong>V2 Rank:</strong> {item.shadow_comparison.v2_rank !== null ? `#${item.shadow_comparison.v2_rank}` : "N/A"} (V1: #{item.shadow_comparison.v1_rank})
-                      </p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}>
-                        <strong>Movement:</strong> {item.shadow_comparison.rank_movement !== null ? (item.shadow_comparison.rank_movement > 0 ? `+${item.shadow_comparison.rank_movement}` : item.shadow_comparison.rank_movement) : "N/A"}
-                      </p>
-                    </div>
-                    <div>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Evidence Gate:</strong> {item.shadow_comparison.evidence_gate || "N/A"}</p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Human Review:</strong> {item.shadow_comparison.review_status || "PENDING"}</p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Activation Eligible:</strong> {item.shadow_comparison.activation_eligible ? "Yes" : "No"}</p>
-                      {item.shadow_comparison.ineligible_reason && (
-                        <p style={{ margin: "2px 0", fontSize: 12, color: "var(--accent)" }}><strong>Ineligible:</strong> {item.shadow_comparison.ineligible_reason}</p>
-                      )}
-                    </div>
-                  </div>
-                </article>
+              <div style={styles.cardHoverActions}>
+                <span title={`Version ${item.score_version}`} style={styles.tooltipIcon}>ℹ️</span>
+                <button type="button" style={styles.textAction}>View details</button>
               </div>
-            )}
+            </div>
           </article>
         ))}
       </div>
@@ -318,69 +218,125 @@ export function RecommendationsPanel({
 }
 
 const styles: Record<string, CSSProperties> = {
-  card: {
-    display: "grid",
-    gap: 20,
-    borderRadius: 28,
+  cinematicCard: {
     background: "var(--panel)",
+    borderRadius: 24,
     boxShadow: "var(--shadow)",
+    overflow: "hidden",
+    backdropFilter: "blur(20px)",
+    border: "1px solid var(--line)",
+  },
+  detailLayout: {
+    display: "flex",
+    flexDirection: "row",
+    gap: 32,
     padding: 32,
+    flexWrap: "wrap",
+  },
+  posterColumn: {
+    flex: "0 0 300px",
+  },
+  detailPoster: {
+    width: "100%",
+    aspectRatio: "2/3",
+    objectFit: "cover",
+    borderRadius: 16,
+    boxShadow: "0 24px 48px rgba(0,0,0,0.6)",
+  },
+  detailPosterFallback: {
+    width: "100%",
+    aspectRatio: "2/3",
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    display: "grid",
+    placeItems: "center",
+    color: "var(--muted)",
+    border: "1px dashed var(--line)",
+  },
+  infoColumn: {
+    flex: "1 1 300px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 20,
   },
   headline: {
     display: "flex",
     justifyContent: "space-between",
+    alignItems: "flex-start",
     gap: 16,
-    alignItems: "start",
     flexWrap: "wrap",
   },
-  eyebrow: {
-    margin: 0,
-    color: "var(--accent)",
-    textTransform: "uppercase",
-    letterSpacing: "0.16em",
-    fontSize: 12,
-  },
   title: {
-    margin: "8px 0",
+    margin: "0 0 8px 0",
     fontSize: "clamp(2rem, 4vw, 3rem)",
+    fontWeight: 700,
+    letterSpacing: "-0.02em",
   },
   meta: {
     margin: 0,
+    fontSize: 15,
     color: "var(--muted)",
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
   },
-  score: {
-    minWidth: 120,
-    display: "grid",
-    placeItems: "center",
-    padding: 18,
-    borderRadius: 24,
+  scoreBadge: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
     background: "var(--accent-soft)",
+    border: "1px solid rgba(217, 119, 54, 0.3)",
+    borderRadius: 16,
+    padding: "12px 20px",
+    minWidth: 100,
+  },
+  scoreValue: {
+    fontSize: 28,
+    fontWeight: 700,
+    color: "var(--accent)",
+    lineHeight: 1,
   },
   scoreLabel: {
-    color: "var(--muted)",
-    fontSize: 12,
+    fontSize: 10,
     textTransform: "uppercase",
     letterSpacing: "0.1em",
+    marginTop: 6,
+    color: "var(--muted)",
   },
   overview: {
     margin: 0,
+    fontSize: 16,
     lineHeight: 1.6,
-    color: "var(--muted)",
+    color: "#ccc",
   },
-  grid: {
-    display: "grid",
-    gap: 16,
-    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+  actionRow: {
+    display: "flex",
+    gap: 12,
+    marginTop: 8,
+    marginBottom: 8,
   },
-  panel: {
+  primaryAction: {
+    padding: "12px 24px",
+    borderRadius: 999,
+    border: "none",
+    background: "var(--accent)",
+    color: "#fff",
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "opacity 0.2s",
+  },
+  secondaryAction: {
+    padding: "10px 20px",
+    borderRadius: 999,
     border: "1px solid var(--line)",
-    borderRadius: 20,
-    padding: 20,
-    background: "rgba(255,255,255,0.55)",
+    background: "transparent",
+    color: "var(--text)",
+    cursor: "pointer",
   },
-  sectionTitle: {
-    marginTop: 0,
-    marginBottom: 12,
+  collapsibleSections: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
   },
   list: {
     listStyle: "none",
@@ -392,70 +348,124 @@ const styles: Record<string, CSSProperties> = {
   item: {
     display: "flex",
     justifyContent: "space-between",
-    gap: 12,
+    fontSize: 14,
+    color: "#ccc",
   },
   small: {
-    margin: "6px 0",
-    color: "var(--muted)",
-    lineHeight: 1.5,
+    margin: "4px 0",
+    fontSize: 13,
+    color: "#aaa",
   },
-  actionRow: {
-    display: "flex",
-    justifyContent: "flex-start",
+  link: {
+    color: "var(--accent)",
+    textDecoration: "none",
   },
-  button: {
-    minHeight: 48,
-    borderRadius: 999,
-    border: 0,
-    background: "linear-gradient(135deg, #8d2e16 0%, #c85f33 100%)",
-    color: "#fff8f0",
-    padding: "0 24px",
-    cursor: "pointer",
-  },
-  recommendationList: {
+  diagnosticGrid: {
     display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+    gap: 16,
+  },
+  recommendationsSection: {
+    marginTop: 24,
+  },
+  sectionHeading: {
+    fontSize: 24,
+    marginBottom: 20,
+    fontWeight: 600,
+  },
+  posterGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
     gap: 20,
   },
-  recommendationCard: {
-    display: "grid",
-    gap: 16,
-    borderRadius: 24,
-    padding: 24,
-    background: "rgba(255,255,255,0.58)",
-    border: "1px solid var(--line)",
+  skeletonCard: {
+    aspectRatio: "2/3",
+    borderRadius: 16,
+    background: "rgba(255,255,255,0.05)",
+    animation: "pulse 2s infinite",
   },
-  recommendationHeader: {
-    display: "grid",
-    gridTemplateColumns: "88px minmax(0, 1fr)",
-    gap: 16,
-    alignItems: "start",
+  posterCard: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+    cursor: "pointer",
   },
-  poster: {
-    width: 88,
-    height: 132,
+  posterWrapper: {
+    position: "relative",
+    aspectRatio: "2/3",
+    borderRadius: 16,
+    overflow: "hidden",
+    boxShadow: "0 8px 16px rgba(0,0,0,0.3)",
+    transition: "transform 0.2s ease, box-shadow 0.2s ease",
+  },
+  cardPoster: {
+    width: "100%",
+    height: "100%",
     objectFit: "cover",
-    borderRadius: 16,
-    background: "rgba(255,255,255,0.8)",
-    border: "1px solid var(--line)",
   },
-  posterFallback: {
-    width: 88,
-    height: 132,
-    borderRadius: 16,
-    border: "1px dashed var(--line)",
-    background: "rgba(255,255,255,0.35)",
+  cardPosterFallback: {
+    width: "100%",
+    height: "100%",
+    background: "rgba(255,255,255,0.05)",
     display: "grid",
     placeItems: "center",
     color: "var(--muted)",
     fontSize: 12,
-    textAlign: "center",
-    padding: 8,
   },
-  recommendationIntro: {
-    minWidth: 0,
+  cardOverlay: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    background: "rgba(0,0,0,0.7)",
+    backdropFilter: "blur(4px)",
+    borderRadius: 8,
+    padding: "4px 8px",
+    display: "flex",
+    alignItems: "center",
   },
-  recommendationTitle: {
-    margin: "6px 0 8px",
-    fontSize: "clamp(1.5rem, 3vw, 2rem)",
+  cardScore: {
+    color: "var(--accent)",
+    fontWeight: 700,
+    fontSize: 14,
   },
+  cardInfo: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  cardTitle: {
+    margin: 0,
+    fontSize: 15,
+    fontWeight: 600,
+    lineHeight: 1.2,
+    display: "-webkit-box",
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+  },
+  cardMeta: {
+    margin: 0,
+    fontSize: 13,
+    color: "var(--muted)",
+  },
+  cardHoverActions: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  tooltipIcon: {
+    cursor: "help",
+    fontSize: 12,
+    opacity: 0.5,
+  },
+  textAction: {
+    background: "none",
+    border: "none",
+    color: "var(--accent)",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: 0,
+  }
 };

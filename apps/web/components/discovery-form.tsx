@@ -1,7 +1,7 @@
 "use client";
 
 import type { CSSProperties, FormEvent } from "react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import type {
   ControlledErrorResponse,
@@ -212,6 +212,24 @@ export function DiscoveryForm() {
   const [lastNaturalLanguageQuery, setLastNaturalLanguageQuery] = useState<string | null>(null);
   const [includeShadow, setIncludeShadow] = useState(false);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      const q = searchParams.get("q");
+      if (q && !naturalLanguageQuery && status === "idle") {
+        setNaturalLanguageQuery(q);
+        setMode("natural-language");
+        runNaturalLanguageDiscovery({
+          query: q,
+          region: filters.region || undefined,
+          page: 1,
+          page_size: parseInteger(filters.pageSize) ?? 20,
+        });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const manualCanSubmit = hasMeaningfulNarrowing(filters) && status !== "loading" && status !== "paging";
   const trimmedQuery = naturalLanguageQuery.trim();
   const naturalLanguageCanSubmit =
@@ -352,7 +370,7 @@ export function DiscoveryForm() {
   return (
     <section style={styles.shell}>
       <div style={styles.hero}>
-        <p style={styles.kicker}>Phase 2E.3</p>
+
         <h1 style={styles.title}>Discover movies with plain language or manual filters.</h1>
         <p style={styles.copy}>
           Natural-language discovery interprets filters once, then reuses the same structured request for pagination.
@@ -360,30 +378,7 @@ export function DiscoveryForm() {
         </p>
       </div>
 
-      <section style={styles.achievementPanel}>
-        <div style={styles.achievementHeader}>
-          <p style={styles.kicker}>Discovery Rules</p>
-          <p style={styles.achievementCopy}>The LLM only interprets filters. Ranking and validation stay in the backend.</p>
-        </div>
-        <div style={styles.achievementGrid}>
-          <article style={styles.achievementCard}>
-            <p style={styles.achievementLabel}>Mode</p>
-            <strong style={styles.achievementValue}>Describe or filter manually</strong>
-          </article>
-          <article style={styles.achievementCard}>
-            <p style={styles.achievementLabel}>Pagination</p>
-            <strong style={styles.achievementValue}>No repeat LLM call after page 1</strong>
-          </article>
-          <article style={styles.achievementCard}>
-            <p style={styles.achievementLabel}>Availability</p>
-            <strong style={styles.achievementValue}>Still planned for Phase 2G</strong>
-          </article>
-          <article style={styles.achievementCard}>
-            <p style={styles.achievementLabel}>Page Size</p>
-            <strong style={styles.achievementValue}>Maximum 20 results</strong>
-          </article>
-        </div>
-      </section>
+
 
       <section style={styles.modeToggle}>
         <button
@@ -687,104 +682,33 @@ function DiscoveryResultsPanel({
 
       <div style={styles.recommendationList}>
         {response.results.slice(0, 20).map((item) => (
-          <article key={`${item.tmdb_source_movie_id}-${item.movie.movie_id}`} style={styles.recommendationCard}>
-            <div style={styles.recommendationHeader}>
+          <article key={`${item.tmdb_source_movie_id}-${item.movie.movie_id}`} style={styles.posterCard}>
+            <div style={styles.posterWrapper}>
               {item.movie.poster_url ? (
-                <img src={item.movie.poster_url} alt={`${item.movie.canonical_title} poster`} style={styles.poster} />
+                <img
+                  src={item.movie.poster_url}
+                  alt={`${item.movie.canonical_title} poster`}
+                  style={styles.cardPoster}
+                />
               ) : (
-                <div style={styles.posterFallback}>No poster</div>
+                <div style={styles.cardPosterFallback}>No poster</div>
               )}
-              <div style={styles.recommendationIntro}>
-                <p style={styles.eyebrow}>Provider position {item.provider_position + 1}</p>
-                <h3 style={styles.recommendationTitle}>
-                  {item.movie.canonical_title} {item.movie.release_year ? `(${item.movie.release_year})` : ""}
-                </h3>
-                <p style={styles.meta}>
-                  {item.movie.original_language ?? "unknown language"} · {item.score_version} · {item.score.toFixed(2)}
-                </p>
+              <div style={styles.cardOverlay}>
+                <span style={styles.cardScore}>{item.score.toFixed(1)}</span>
               </div>
             </div>
 
-            <p style={styles.overview}>{item.movie.overview || "No overview was returned."}</p>
+            <div style={styles.cardInfo}>
+              <h3 style={styles.cardTitle}>{item.movie.canonical_title}</h3>
+              <p style={styles.cardMeta}>
+                {item.movie.release_year || "YYYY"} • {item.movie.original_language?.toUpperCase() || "UN"}
+              </p>
 
-            <div style={styles.grid}>
-              <article style={styles.panel}>
-                <h4 style={styles.sectionTitle}>Score Breakdown</h4>
-                <ul style={styles.list}>
-                  {Object.entries(item.score_components).map(([key, value]) => (
-                    <li key={key} style={styles.item}>
-                      <span>{key}</span>
-                      <strong>{value === null ? "missing" : value.toFixed(2)}</strong>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-
-              <article style={styles.panel}>
-                <h4 style={styles.sectionTitle}>Freshness</h4>
-                <ul style={styles.list}>
-                  {Object.entries(item.freshness).map(([key, value]) => (
-                    <li key={key} style={styles.item}>
-                      <span>{key}</span>
-                      <strong>{value}</strong>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            </div>
-
-            <div style={styles.grid}>
-              <article style={styles.panel}>
-                <h4 style={styles.sectionTitle}>Missing Signals</h4>
-                <p style={styles.small}>{item.missing_signals.length ? item.missing_signals.join(", ") : "None"}</p>
-              </article>
-
-              <article style={styles.panel}>
-                <h4 style={styles.sectionTitle}>Provenance</h4>
-                <p style={styles.small}>Source: {item.provenance.source}</p>
-                <p style={styles.small}>TMDB ID: {item.tmdb_source_movie_id}</p>
-                <p style={styles.small}>
-                  Source URL:{" "}
-                  {item.provenance.source_url ? (
-                    <a href={item.provenance.source_url} target="_blank" rel="noreferrer">
-                      {item.provenance.source_url}
-                    </a>
-                  ) : (
-                    "unavailable"
-                  )}
-                </p>
-              </article>
-            </div>
-
-            {item.shadow_comparison && (
-              <div style={{ ...styles.grid, marginTop: 12 }}>
-                <article style={{ ...styles.panel, gridColumn: "span 2", border: "1px dashed var(--accent)", background: "rgba(141,46,22,0.03)" }}>
-                  <h4 style={{ ...styles.sectionTitle, color: "var(--accent)" }}>Shadow Diagnostics (cine-score-v2)</h4>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginTop: 8 }}>
-                    <div>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Shadow Version:</strong> {item.shadow_comparison.score_version}</p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}>
-                        <strong>V2 Score:</strong> {item.shadow_comparison.v2_score !== null ? item.shadow_comparison.v2_score.toFixed(2) : "N/A"}
-                      </p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}>
-                        <strong>V2 Rank:</strong> {item.shadow_comparison.v2_rank !== null ? `#${item.shadow_comparison.v2_rank}` : "N/A"} (V1: #{item.shadow_comparison.v1_rank})
-                      </p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}>
-                        <strong>Movement:</strong> {item.shadow_comparison.rank_movement !== null ? (item.shadow_comparison.rank_movement > 0 ? `+${item.shadow_comparison.rank_movement}` : item.shadow_comparison.rank_movement) : "N/A"}
-                      </p>
-                    </div>
-                    <div>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Evidence Gate:</strong> {item.shadow_comparison.evidence_gate || "N/A"}</p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Human Review:</strong> {item.shadow_comparison.review_status || "PENDING"}</p>
-                      <p style={{ margin: "2px 0", fontSize: 12 }}><strong>Activation Eligible:</strong> {item.shadow_comparison.activation_eligible ? "Yes" : "No"}</p>
-                      {item.shadow_comparison.ineligible_reason && (
-                        <p style={{ margin: "2px 0", fontSize: 12, color: "var(--accent)" }}><strong>Ineligible:</strong> {item.shadow_comparison.ineligible_reason}</p>
-                      )}
-                    </div>
-                  </div>
-                </article>
+              <div style={styles.cardHoverActions}>
+                <span title={`Version ${item.score_version}`} style={styles.tooltipIcon}>ℹ️</span>
+                <button type="button" style={styles.textAction}>View details</button>
               </div>
-            )}
+            </div>
           </article>
         ))}
       </div>
@@ -793,137 +717,53 @@ function DiscoveryResultsPanel({
 }
 
 const styles: Record<string, CSSProperties> = {
-  shell: { maxWidth: 980, margin: "0 auto", display: "grid", gap: 24 },
-  hero: { padding: "32px 32px 12px" },
-  kicker: { margin: 0, color: "var(--accent)", letterSpacing: "0.16em", textTransform: "uppercase", fontSize: 12 },
-  title: { margin: "10px 0 12px", fontSize: "clamp(2.2rem, 5vw, 4rem)" },
-  copy: { margin: 0, maxWidth: 700, color: "var(--muted)", lineHeight: 1.7 },
-  achievementPanel: { display: "grid", gap: 18, padding: "0 32px" },
-  achievementHeader: { display: "flex", justifyContent: "space-between", gap: 16, alignItems: "end", flexWrap: "wrap" },
-  achievementCopy: { margin: 0, color: "var(--muted)" },
-  achievementGrid: { display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" },
-  achievementCard: {
-    borderRadius: 22,
-    padding: "18px 20px",
-    background: "linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(248,232,213,0.92) 100%)",
-    border: "1px solid rgba(141,46,22,0.14)",
-    boxShadow: "0 18px 40px rgba(86, 42, 16, 0.08)",
-  },
-  achievementLabel: { margin: 0, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.12em", fontSize: 11 },
-  achievementValue: { display: "block", marginTop: 8, fontSize: "clamp(1rem, 2vw, 1.25rem)" },
-  modeToggle: { display: "flex", gap: 12, padding: "0 32px", flexWrap: "wrap" },
-  modeButton: {
-    minHeight: 44,
-    borderRadius: 999,
-    border: "1px solid var(--line)",
-    background: "rgba(255,255,255,0.7)",
-    color: "var(--text)",
-    padding: "0 18px",
-    cursor: "pointer",
-  },
-  activeModeButton: {
-    minHeight: 44,
-    borderRadius: 999,
-    border: "1px solid rgba(141,46,22,0.2)",
-    background: "linear-gradient(135deg, rgba(141,46,22,0.16) 0%, rgba(200,95,51,0.16) 100%)",
-    color: "var(--text)",
-    padding: "0 18px",
-    cursor: "pointer",
-  },
-  form: { display: "grid", gap: 20, borderRadius: 28, background: "var(--panel)", boxShadow: "var(--shadow)", padding: 32 },
-  section: { display: "grid", gap: 14 },
-  subheading: { margin: 0, fontSize: "clamp(1.2rem, 2vw, 1.5rem)" },
+  shell: { maxWidth: 1024, margin: "0 auto", display: "flex", flexDirection: "column", gap: 32, padding: "40px 0" },
+  hero: { textAlign: "center", padding: "32px 20px 24px", display: "flex", flexDirection: "column", alignItems: "center" },
+  title: { margin: "0 0 16px", fontSize: "clamp(2.5rem, 6vw, 4rem)", fontWeight: 800, letterSpacing: "-0.03em" },
+  copy: { margin: "0 0 24px", fontSize: "clamp(1.1rem, 2vw, 1.4rem)", color: "var(--muted)", maxWidth: 600 },
+  modeToggle: { display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginBottom: 16 },
+  modeButton: { minHeight: 44, borderRadius: 999, border: "1px solid var(--line)", background: "rgba(255,255,255,0.05)", color: "var(--text)", padding: "0 24px", cursor: "pointer", fontWeight: 600 },
+  activeModeButton: { minHeight: 44, borderRadius: 999, border: "none", background: "var(--accent)", color: "#fff", padding: "0 24px", cursor: "pointer", fontWeight: 600 },
+  form: { display: "flex", flexDirection: "column", gap: 24, padding: 32, borderRadius: 24, background: "var(--panel)", border: "1px solid var(--line)", boxShadow: "var(--shadow)", backdropFilter: "blur(20px)" },
+  section: { display: "flex", flexDirection: "column", gap: 16 },
+  subheading: { margin: 0, fontSize: 20, fontWeight: 600 },
   genreGrid: { display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" },
-  genreChip: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 18, background: "rgba(255,255,255,0.58)", border: "1px solid var(--line)" },
+  genreChip: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, background: "rgba(0,0,0,0.2)", border: "1px solid var(--line)", cursor: "pointer" },
   fieldGrid: { display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" },
-  field: { display: "grid", gap: 8 },
-  input: { minHeight: 48, borderRadius: 16, border: "1px solid var(--line)", padding: "0 14px", background: "rgba(255,255,255,0.78)" },
-  textarea: {
-    minHeight: 128,
-    borderRadius: 16,
-    border: "1px solid var(--line)",
-    padding: "14px",
-    background: "rgba(255,255,255,0.78)",
-    resize: "vertical",
-    font: "inherit",
-  },
-  exampleRow: { display: "flex", gap: 10, flexWrap: "wrap" },
-  exampleButton: {
-    borderRadius: 999,
-    border: "1px solid var(--line)",
-    background: "rgba(255,255,255,0.7)",
-    color: "var(--text)",
-    padding: "10px 14px",
-    cursor: "pointer",
-    textAlign: "left",
-  },
+  field: { display: "flex", flexDirection: "column", gap: 8, fontSize: 14, color: "var(--muted)" },
+  input: { minHeight: 48, borderRadius: 12, border: "1px solid var(--line)", padding: "0 16px", background: "rgba(0,0,0,0.2)", color: "var(--text)" },
+  textarea: { minHeight: 120, borderRadius: 12, border: "1px solid var(--line)", padding: "16px", background: "rgba(0,0,0,0.2)", color: "var(--text)", resize: "vertical", fontSize: "1.1rem" },
+  exampleRow: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 },
+  exampleButton: { borderRadius: 999, border: "1px solid var(--line)", background: "rgba(255,255,255,0.05)", color: "var(--text)", padding: "8px 16px", cursor: "pointer", fontSize: 13 },
   disabledField: { display: "flex", gap: 10, alignItems: "center", color: "var(--muted)" },
-  helper: { margin: 0, color: "var(--muted)", lineHeight: 1.6 },
-  actionRow: { display: "flex", gap: 12, flexWrap: "wrap" },
-  button: {
-    minHeight: 48,
-    borderRadius: 999,
-    border: 0,
-    background: "linear-gradient(135deg, #8d2e16 0%, #c85f33 100%)",
-    color: "#fff8f0",
-    padding: "0 24px",
-    cursor: "pointer",
-  },
-  secondaryButton: {
-    minHeight: 48,
-    borderRadius: 999,
-    border: "1px solid var(--line)",
-    background: "rgba(255,255,255,0.7)",
-    color: "var(--text)",
-    padding: "0 24px",
-    cursor: "pointer",
-  },
-  error: {
-    margin: 0,
-    color: "#8d2e16",
-    background: "rgba(200,95,51,0.08)",
-    border: "1px solid rgba(141,46,22,0.18)",
-    borderRadius: 18,
-    padding: "14px 18px",
-  },
-  card: { display: "grid", gap: 20, borderRadius: 28, background: "var(--panel)", boxShadow: "var(--shadow)", padding: 32 },
+  helper: { margin: 0, color: "var(--muted)", fontSize: 14 },
+  actionRow: { display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 },
+  button: { minHeight: 48, borderRadius: 999, border: "none", background: "var(--accent)", color: "#fff", padding: "0 32px", fontWeight: 600, cursor: "pointer" },
+  secondaryButton: { minHeight: 48, borderRadius: 999, border: "1px solid var(--line)", background: "transparent", color: "var(--text)", padding: "0 24px", cursor: "pointer" },
+  error: { margin: 0, color: "#ff6b6b", background: "rgba(255,107,107,0.1)", border: "1px solid rgba(255,107,107,0.2)", borderRadius: 12, padding: "16px 20px" },
+  card: { display: "flex", flexDirection: "column", gap: 20, borderRadius: 24, background: "var(--panel)", boxShadow: "var(--shadow)", padding: 32, border: "1px solid var(--line)" },
   headline: { display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", flexWrap: "wrap" },
   eyebrow: { margin: 0, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.16em", fontSize: 12 },
-  resultTitle: { margin: "8px 0", fontSize: "clamp(2rem, 4vw, 3rem)" },
-  meta: { margin: 0, color: "var(--muted)" },
-  overview: { margin: 0, lineHeight: 1.6, color: "var(--muted)" },
+  resultTitle: { margin: "8px 0", fontSize: "clamp(1.5rem, 3vw, 2.5rem)", fontWeight: 700 },
+  meta: { margin: 0, color: "var(--muted)", fontSize: 14 },
+  overview: { margin: 0, lineHeight: 1.6, color: "#ccc" },
   filterList: { display: "flex", gap: 10, flexWrap: "wrap" },
-  filterBadge: {
-    borderRadius: 999,
-    border: "1px solid var(--line)",
-    background: "rgba(255,255,255,0.75)",
-    padding: "8px 12px",
-    color: "var(--text)",
-  },
+  filterBadge: { borderRadius: 999, border: "1px solid var(--line)", background: "rgba(255,255,255,0.05)", padding: "8px 12px", color: "var(--text)", fontSize: 13 },
   paginationRow: { display: "flex", gap: 12, flexWrap: "wrap" },
-  recommendationList: { display: "grid", gap: 20 },
-  recommendationCard: { display: "grid", gap: 16, borderRadius: 24, padding: 24, background: "rgba(255,255,255,0.58)", border: "1px solid var(--line)" },
-  recommendationHeader: { display: "grid", gridTemplateColumns: "88px minmax(0, 1fr)", gap: 16, alignItems: "start" },
-  poster: { width: 88, height: 132, objectFit: "cover", borderRadius: 16, background: "rgba(255,255,255,0.8)", border: "1px solid var(--line)" },
-  posterFallback: {
-    width: 88,
-    height: 132,
-    borderRadius: 16,
-    border: "1px dashed var(--line)",
-    background: "rgba(255,255,255,0.35)",
-    display: "grid",
-    placeItems: "center",
-    color: "var(--muted)",
-    fontSize: 12,
-    textAlign: "center",
-    padding: 8,
-  },
-  recommendationIntro: { minWidth: 0 },
-  recommendationTitle: { margin: "6px 0 8px", fontSize: "clamp(1.5rem, 3vw, 2rem)" },
-  grid: { display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" },
-  panel: { border: "1px solid var(--line)", borderRadius: 20, padding: 20, background: "rgba(255,255,255,0.55)" },
-  sectionTitle: { marginTop: 0, marginBottom: 12 },
-  list: { listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 10 },
-  item: { display: "flex", justifyContent: "space-between", gap: 12 },
-  small: { margin: "6px 0", color: "var(--muted)", lineHeight: 1.5 },
+  recommendationList: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 20 },
+  posterCard: { display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" },
+  posterWrapper: { position: "relative", aspectRatio: "2/3", borderRadius: 16, overflow: "hidden", boxShadow: "0 8px 16px rgba(0,0,0,0.3)" },
+  cardPoster: { width: "100%", height: "100%", objectFit: "cover" },
+  cardPosterFallback: { width: "100%", height: "100%", background: "rgba(255,255,255,0.05)", display: "grid", placeItems: "center", color: "var(--muted)", fontSize: 12, border: "1px dashed var(--line)" },
+  cardOverlay: { position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)", borderRadius: 8, padding: "4px 8px", display: "flex", alignItems: "center" },
+  cardScore: { color: "var(--accent)", fontWeight: 700, fontSize: 14 },
+  cardInfo: { display: "flex", flexDirection: "column", gap: 4 },
+  cardTitle: { margin: 0, fontSize: 15, fontWeight: 600, lineHeight: 1.2, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
+  cardMeta: { margin: 0, fontSize: 13, color: "var(--muted)" },
+  cardHoverActions: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 },
+  tooltipIcon: { cursor: "help", fontSize: 12, opacity: 0.5 },
+  textAction: { background: "none", border: "none", color: "var(--accent)", fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0 },
+  panel: { border: "1px solid var(--line)", borderRadius: 16, padding: 16, background: "rgba(255,255,255,0.03)" },
+  sectionTitle: { marginTop: 0, marginBottom: 12, fontSize: 16 },
+  small: { margin: "4px 0", color: "#ccc", fontSize: 14 },
 };
