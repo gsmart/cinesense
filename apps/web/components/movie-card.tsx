@@ -49,6 +49,7 @@ export function MovieCard({
             <div style={styles.actionRow}>
               <button
                 type="button"
+                className="interactive"
                 style={styles.primaryAction}
                 disabled={recommendationStatus === "loading"}
                 onClick={onFindSimilar}
@@ -164,7 +165,7 @@ export function RecommendationsPanel({
       <section style={styles.recommendationsSection}>
         <h2 style={styles.sectionHeading}>Recommendations failed</h2>
         <p style={{ color: "var(--muted)" }}>{error}</p>
-        <button type="button" style={styles.secondaryAction} onClick={onRetry}>Retry</button>
+        <button type="button" className="interactive" style={styles.secondaryAction} onClick={onRetry}>Retry</button>
       </section>
     );
   }
@@ -183,7 +184,7 @@ export function RecommendationsPanel({
 
       <div style={styles.posterGrid}>
         {response.recommendations.slice(0, 20).map((item) => (
-          <article key={item.movie.movie_id} style={styles.posterCard}>
+          <article key={item.movie.movie_id} className="interactive" style={styles.posterCard}>
             <div style={styles.posterWrapper}>
               {item.movie.poster_url ? (
                 <img
@@ -207,7 +208,7 @@ export function RecommendationsPanel({
 
               <div style={styles.cardHoverActions}>
                 <span title={`Version ${item.score_version}`} style={styles.tooltipIcon}>ℹ️</span>
-                <button type="button" style={styles.textAction}>View details</button>
+                <button type="button" className="interactive" style={styles.textAction}>View details</button>
               </div>
             </div>
           </article>
@@ -241,14 +242,14 @@ const styles: Record<string, CSSProperties> = {
     aspectRatio: "2/3",
     objectFit: "cover",
     borderRadius: 16,
-    boxShadow: "0 24px 48px rgba(0,0,0,0.6)",
+    boxShadow: "var(--shadow)",
   },
   detailPosterFallback: {
     width: "100%",
     aspectRatio: "2/3",
     borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    display: "grid",
+    backgroundColor: "var(--surface)",
+    display: "flex",
     placeItems: "center",
     color: "var(--muted)",
     border: "1px dashed var(--line)",
@@ -307,7 +308,7 @@ const styles: Record<string, CSSProperties> = {
     margin: 0,
     fontSize: 16,
     lineHeight: 1.6,
-    color: "#ccc",
+    color: "var(--text)",
   },
   actionRow: {
     display: "flex",
@@ -316,22 +317,25 @@ const styles: Record<string, CSSProperties> = {
     marginBottom: 8,
   },
   primaryAction: {
-    padding: "12px 24px",
-    borderRadius: 999,
-    border: "none",
     background: "var(--accent)",
     color: "#fff",
+    border: "none",
+    padding: "12px 24px",
+    borderRadius: 999,
+    fontSize: 16,
     fontWeight: 600,
     cursor: "pointer",
-    transition: "opacity 0.2s",
   },
   secondaryAction: {
+    background: "var(--surface)",
+    color: "var(--text)",
+    border: "1px solid var(--line)",
     padding: "10px 20px",
     borderRadius: 999,
-    border: "1px solid var(--line)",
-    background: "transparent",
-    color: "var(--text)",
+    fontSize: 14,
+    fontWeight: 500,
     cursor: "pointer",
+    marginTop: 16,
   },
   collapsibleSections: {
     display: "flex",
@@ -349,12 +353,12 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     fontSize: 14,
-    color: "#ccc",
+    color: "var(--text)",
   },
   small: {
     margin: "4px 0",
     fontSize: 13,
-    color: "#aaa",
+    color: "var(--muted)",
   },
   link: {
     color: "var(--accent)",
@@ -381,7 +385,7 @@ const styles: Record<string, CSSProperties> = {
   skeletonCard: {
     aspectRatio: "2/3",
     borderRadius: 16,
-    background: "rgba(255,255,255,0.05)",
+    background: "var(--surface)",
     animation: "pulse 2s infinite",
   },
   posterCard: {
@@ -395,8 +399,8 @@ const styles: Record<string, CSSProperties> = {
     aspectRatio: "2/3",
     borderRadius: 16,
     overflow: "hidden",
-    boxShadow: "0 8px 16px rgba(0,0,0,0.3)",
-    transition: "transform 0.2s ease, box-shadow 0.2s ease",
+    boxShadow: "var(--shadow)",
+    backgroundColor: "var(--surface)",
   },
   cardPoster: {
     width: "100%",
@@ -406,7 +410,7 @@ const styles: Record<string, CSSProperties> = {
   cardPosterFallback: {
     width: "100%",
     height: "100%",
-    background: "rgba(255,255,255,0.05)",
+    background: "var(--surface)",
     display: "grid",
     placeItems: "center",
     color: "var(--muted)",
@@ -416,17 +420,17 @@ const styles: Record<string, CSSProperties> = {
     position: "absolute",
     top: 8,
     right: 8,
-    background: "rgba(0,0,0,0.7)",
-    backdropFilter: "blur(4px)",
-    borderRadius: 8,
-    padding: "4px 8px",
     display: "flex",
     alignItems: "center",
   },
   cardScore: {
+    background: "var(--panel)",
     color: "var(--accent)",
+    padding: "4px 8px",
+    borderRadius: 8,
+    fontSize: 13,
     fontWeight: 700,
-    fontSize: 14,
+    boxShadow: "var(--shadow)",
   },
   cardInfo: {
     display: "flex",

@@ -8,11 +8,31 @@ export function CollapsiblePanel({ title, children, defaultExpanded = false, hea
 
   return (
     <article style={styles.panel}>
-      <button type="button" onClick={() => setExpanded(!expanded)} style={{ ...styles.button, color: headerColor || "inherit" }}>
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="interactive"
+        style={{ ...styles.button, color: headerColor || "inherit" }}
+        aria-expanded={expanded}
+      >
         <span>{title}</span>
-        <span style={styles.icon}>{expanded ? "−" : "+"}</span>
+        <span style={{ ...styles.icon, transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}>
+          ▼
+        </span>
       </button>
-      {expanded && <div style={styles.content}>{children}</div>}
+      <div
+        style={{
+          ...styles.contentWrapper,
+          gridTemplateRows: expanded ? "1fr" : "0fr",
+          opacity: expanded ? 1 : 0,
+        }}
+      >
+        <div style={styles.contentInner}>
+          <div style={styles.content}>
+            {children}
+          </div>
+        </div>
+      </div>
     </article>
   );
 }
@@ -21,8 +41,9 @@ const styles: Record<string, CSSProperties> = {
   panel: {
     border: "1px solid var(--line)",
     borderRadius: 16,
-    background: "rgba(255, 255, 255, 0.03)",
+    background: "var(--surface)",
     overflow: "hidden",
+    marginBottom: 8,
   },
   button: {
     width: "100%",
@@ -39,9 +60,15 @@ const styles: Record<string, CSSProperties> = {
     textAlign: "left",
   },
   icon: {
-    fontSize: 20,
-    fontWeight: 400,
-    lineHeight: 1,
+    fontSize: 14,
+    transition: "transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+  contentWrapper: {
+    display: "grid",
+    transition: "grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+  contentInner: {
+    overflow: "hidden",
   },
   content: {
     padding: "0 20px 20px",

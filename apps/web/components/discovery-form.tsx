@@ -383,6 +383,7 @@ export function DiscoveryForm() {
       <section style={styles.modeToggle}>
         <button
           type="button"
+          className="interactive"
           style={mode === "natural-language" ? styles.activeModeButton : styles.modeButton}
           onClick={() => setMode("natural-language")}
         >
@@ -390,6 +391,7 @@ export function DiscoveryForm() {
         </button>
         <button
           type="button"
+          className="interactive"
           style={mode === "manual" ? styles.activeModeButton : styles.modeButton}
           onClick={() => setMode("manual")}
         >
@@ -417,6 +419,7 @@ export function DiscoveryForm() {
                 <button
                   key={prompt}
                   type="button"
+                  className="interactive"
                   style={styles.exampleButton}
                   onClick={() => setNaturalLanguageQuery(prompt)}
                   disabled={status === "loading" || status === "paging"}
@@ -456,10 +459,10 @@ export function DiscoveryForm() {
           </section>
 
           <div style={styles.actionRow}>
-            <button type="submit" style={styles.button} disabled={!naturalLanguageCanSubmit}>
-              {status === "loading" ? "Discovering..." : "Discover movies"}
+            <button type="submit" className="interactive" style={styles.button} disabled={!naturalLanguageCanSubmit}>
+              {status === "loading" ? "Searching…" : "Discover"}
             </button>
-            <button type="button" style={styles.secondaryButton} onClick={onNaturalLanguageClear} disabled={status === "loading" || status === "paging"}>
+            <button type="button" className="interactive" style={styles.secondaryButton} onClick={onNaturalLanguageClear} disabled={status === "loading" || status === "paging"}>
               Clear
             </button>
           </div>
@@ -541,10 +544,10 @@ export function DiscoveryForm() {
           </section>
 
           <div style={styles.actionRow}>
-            <button type="submit" style={styles.button} disabled={!manualCanSubmit}>
-              {status === "loading" ? "Discovering..." : "Discover movies"}
+            <button type="submit" className="interactive" style={styles.button} disabled={!manualCanSubmit}>
+              {status === "loading" ? "Searching…" : "Discover"}
             </button>
-            <button type="button" style={styles.secondaryButton} onClick={onManualReset} disabled={status === "loading" || status === "paging"}>
+            <button type="button" className="interactive" style={styles.secondaryButton} onClick={onManualReset} disabled={status === "loading" || status === "paging"}>
               Reset filters
             </button>
           </div>
@@ -672,17 +675,17 @@ function DiscoveryResultsPanel({
       ) : null}
 
       <div style={styles.paginationRow}>
-        <button type="button" style={styles.secondaryButton} onClick={onPreviousPage} disabled={previousDisabled}>
+        <button type="button" className="interactive" style={styles.secondaryButton} onClick={onPreviousPage} disabled={previousDisabled}>
           Previous
         </button>
-        <button type="button" style={styles.secondaryButton} onClick={onNextPage} disabled={nextDisabled}>
+        <button type="button" className="interactive" style={styles.secondaryButton} onClick={onNextPage} disabled={nextDisabled}>
           Next
         </button>
       </div>
 
       <div style={styles.recommendationList}>
         {response.results.slice(0, 20).map((item) => (
-          <article key={`${item.tmdb_source_movie_id}-${item.movie.movie_id}`} style={styles.posterCard}>
+          <article key={`${item.tmdb_source_movie_id}-${item.movie.movie_id}`} className="interactive" style={styles.posterCard}>
             <div style={styles.posterWrapper}>
               {item.movie.poster_url ? (
                 <img
@@ -706,7 +709,7 @@ function DiscoveryResultsPanel({
 
               <div style={styles.cardHoverActions}>
                 <span title={`Version ${item.score_version}`} style={styles.tooltipIcon}>ℹ️</span>
-                <button type="button" style={styles.textAction}>View details</button>
+                <button type="button" className="interactive" style={styles.textAction}>View details</button>
               </div>
             </div>
           </article>
@@ -722,48 +725,48 @@ const styles: Record<string, CSSProperties> = {
   title: { margin: "0 0 16px", fontSize: "clamp(2.5rem, 6vw, 4rem)", fontWeight: 800, letterSpacing: "-0.03em" },
   copy: { margin: "0 0 24px", fontSize: "clamp(1.1rem, 2vw, 1.4rem)", color: "var(--muted)", maxWidth: 600 },
   modeToggle: { display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginBottom: 16 },
-  modeButton: { minHeight: 44, borderRadius: 999, border: "1px solid var(--line)", background: "rgba(255,255,255,0.05)", color: "var(--text)", padding: "0 24px", cursor: "pointer", fontWeight: 600 },
+  modeButton: { minHeight: 44, borderRadius: 999, border: "1px solid var(--line)", background: "var(--surface)", color: "var(--text)", padding: "0 24px", cursor: "pointer", fontWeight: 600 },
   activeModeButton: { minHeight: 44, borderRadius: 999, border: "none", background: "var(--accent)", color: "#fff", padding: "0 24px", cursor: "pointer", fontWeight: 600 },
   form: { display: "flex", flexDirection: "column", gap: 24, padding: 32, borderRadius: 24, background: "var(--panel)", border: "1px solid var(--line)", boxShadow: "var(--shadow)", backdropFilter: "blur(20px)" },
   section: { display: "flex", flexDirection: "column", gap: 16 },
   subheading: { margin: 0, fontSize: 20, fontWeight: 600 },
   genreGrid: { display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" },
-  genreChip: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, background: "rgba(0,0,0,0.2)", border: "1px solid var(--line)", cursor: "pointer" },
+  genreChip: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, background: "var(--surface-elevated)", border: "1px solid var(--line)", cursor: "pointer" },
   fieldGrid: { display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" },
   field: { display: "flex", flexDirection: "column", gap: 8, fontSize: 14, color: "var(--muted)" },
-  input: { minHeight: 48, borderRadius: 12, border: "1px solid var(--line)", padding: "0 16px", background: "rgba(0,0,0,0.2)", color: "var(--text)" },
-  textarea: { minHeight: 120, borderRadius: 12, border: "1px solid var(--line)", padding: "16px", background: "rgba(0,0,0,0.2)", color: "var(--text)", resize: "vertical", fontSize: "1.1rem" },
+  input: { minHeight: 48, borderRadius: 12, border: "1px solid var(--line)", padding: "0 16px", background: "var(--surface-elevated)", color: "var(--text)" },
+  textarea: { minHeight: 120, borderRadius: 12, border: "1px solid var(--line)", padding: "16px", background: "var(--surface-elevated)", color: "var(--text)", resize: "vertical", fontSize: "1.1rem" },
   exampleRow: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 },
-  exampleButton: { borderRadius: 999, border: "1px solid var(--line)", background: "rgba(255,255,255,0.05)", color: "var(--text)", padding: "8px 16px", cursor: "pointer", fontSize: 13 },
+  exampleButton: { borderRadius: 999, border: "1px solid var(--line)", background: "var(--surface)", color: "var(--text)", padding: "8px 16px", cursor: "pointer", fontSize: 13 },
   disabledField: { display: "flex", gap: 10, alignItems: "center", color: "var(--muted)" },
   helper: { margin: 0, color: "var(--muted)", fontSize: 14 },
   actionRow: { display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 },
   button: { minHeight: 48, borderRadius: 999, border: "none", background: "var(--accent)", color: "#fff", padding: "0 32px", fontWeight: 600, cursor: "pointer" },
   secondaryButton: { minHeight: 48, borderRadius: 999, border: "1px solid var(--line)", background: "transparent", color: "var(--text)", padding: "0 24px", cursor: "pointer" },
-  error: { margin: 0, color: "#ff6b6b", background: "rgba(255,107,107,0.1)", border: "1px solid rgba(255,107,107,0.2)", borderRadius: 12, padding: "16px 20px" },
+  error: { margin: 0, color: "var(--error-text)", background: "var(--error-bg)", border: "1px solid var(--error-border)", borderRadius: 12, padding: "16px 20px" },
   card: { display: "flex", flexDirection: "column", gap: 20, borderRadius: 24, background: "var(--panel)", boxShadow: "var(--shadow)", padding: 32, border: "1px solid var(--line)" },
   headline: { display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", flexWrap: "wrap" },
   eyebrow: { margin: 0, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.16em", fontSize: 12 },
   resultTitle: { margin: "8px 0", fontSize: "clamp(1.5rem, 3vw, 2.5rem)", fontWeight: 700 },
   meta: { margin: 0, color: "var(--muted)", fontSize: 14 },
-  overview: { margin: 0, lineHeight: 1.6, color: "#ccc" },
+  overview: { margin: 0, lineHeight: 1.6, color: "var(--text)" },
   filterList: { display: "flex", gap: 10, flexWrap: "wrap" },
-  filterBadge: { borderRadius: 999, border: "1px solid var(--line)", background: "rgba(255,255,255,0.05)", padding: "8px 12px", color: "var(--text)", fontSize: 13 },
+  filterBadge: { borderRadius: 999, border: "1px solid var(--line)", background: "var(--surface)", padding: "8px 12px", color: "var(--text)", fontSize: 13 },
   paginationRow: { display: "flex", gap: 12, flexWrap: "wrap" },
   recommendationList: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 20 },
   posterCard: { display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" },
-  posterWrapper: { position: "relative", aspectRatio: "2/3", borderRadius: 16, overflow: "hidden", boxShadow: "0 8px 16px rgba(0,0,0,0.3)" },
+  posterWrapper: { position: "relative", aspectRatio: "2/3", borderRadius: 16, overflow: "hidden", boxShadow: "var(--shadow)", backgroundColor: "var(--surface)" },
   cardPoster: { width: "100%", height: "100%", objectFit: "cover" },
-  cardPosterFallback: { width: "100%", height: "100%", background: "rgba(255,255,255,0.05)", display: "grid", placeItems: "center", color: "var(--muted)", fontSize: 12, border: "1px dashed var(--line)" },
-  cardOverlay: { position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)", borderRadius: 8, padding: "4px 8px", display: "flex", alignItems: "center" },
-  cardScore: { color: "var(--accent)", fontWeight: 700, fontSize: 14 },
+  cardPosterFallback: { width: "100%", height: "100%", background: "var(--surface)", display: "grid", placeItems: "center", color: "var(--muted)", fontSize: 12, border: "1px dashed var(--line)" },
+  cardOverlay: { position: "absolute", top: 8, right: 8, background: "var(--panel)", borderRadius: 8, padding: "4px 8px", display: "flex", alignItems: "center", boxShadow: "var(--shadow)" },
+  cardScore: { color: "var(--accent)", fontWeight: 700, fontSize: 13 },
   cardInfo: { display: "flex", flexDirection: "column", gap: 4 },
   cardTitle: { margin: 0, fontSize: 15, fontWeight: 600, lineHeight: 1.2, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
   cardMeta: { margin: 0, fontSize: 13, color: "var(--muted)" },
   cardHoverActions: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 },
   tooltipIcon: { cursor: "help", fontSize: 12, opacity: 0.5 },
   textAction: { background: "none", border: "none", color: "var(--accent)", fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0 },
-  panel: { border: "1px solid var(--line)", borderRadius: 16, padding: 16, background: "rgba(255,255,255,0.03)" },
+  panel: { border: "1px solid var(--line)", borderRadius: 16, padding: 16, background: "var(--surface)" },
   sectionTitle: { marginTop: 0, marginBottom: 12, fontSize: 16 },
-  small: { margin: "4px 0", color: "#ccc", fontSize: 14 },
+  small: { margin: "4px 0", color: "var(--text)", fontSize: 14 },
 };

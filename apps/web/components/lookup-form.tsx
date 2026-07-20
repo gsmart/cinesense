@@ -122,7 +122,7 @@ export function LookupForm() {
             onChange={(e) => setNlQuery(e.target.value)}
             style={styles.searchInput}
           />
-          <button type="submit" style={styles.searchButton}>Discover</button>
+          <button type="submit" className="interactive" style={styles.searchButton}>Discover</button>
         </form>
 
         <div style={styles.chipList}>
@@ -130,6 +130,7 @@ export function LookupForm() {
             <button
               key={chip}
               type="button"
+              className="interactive"
               style={styles.chip}
               onClick={() => {
                 setNlQuery(chip);
@@ -145,6 +146,7 @@ export function LookupForm() {
       <div style={styles.toggleContainer}>
         <button
           type="button"
+          className="interactive"
           onClick={() => setShowExact(!showExact)}
           style={styles.exactToggle}
         >
@@ -210,7 +212,7 @@ export function LookupForm() {
             </label>
           )}
           <div style={styles.formActions}>
-            <button type="submit" style={styles.button} disabled={status === "loading"}>
+            <button type="submit" className="interactive" style={styles.button} disabled={status === "loading"}>
               {status === "loading" ? "Looking up..." : "Lookup"}
             </button>
           </div>
@@ -286,11 +288,11 @@ const styles: Record<string, CSSProperties> = {
     width: "100%",
     maxWidth: 720,
     gap: 8,
-    background: "rgba(255,255,255,0.05)",
+    background: "var(--surface)",
     padding: 8,
     borderRadius: 999,
     border: "1px solid var(--line)",
-    boxShadow: "0 16px 32px rgba(0,0,0,0.4)",
+    boxShadow: "var(--shadow)",
     backdropFilter: "blur(20px)",
   },
   searchInput: {
@@ -311,7 +313,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: "1.1rem",
     fontWeight: 600,
     cursor: "pointer",
-    transition: "transform 0.2s, box-shadow 0.2s",
   },
   chipList: {
     display: "flex",
@@ -324,12 +325,11 @@ const styles: Record<string, CSSProperties> = {
   chip: {
     padding: "8px 16px",
     borderRadius: 999,
-    background: "rgba(255,255,255,0.05)",
+    background: "var(--surface)",
     border: "1px solid var(--line)",
     color: "var(--text)",
     fontSize: 14,
     cursor: "pointer",
-    transition: "background 0.2s, border-color 0.2s",
   },
   toggleContainer: {
     display: "flex",
@@ -378,7 +378,7 @@ const styles: Record<string, CSSProperties> = {
     minHeight: 48,
     borderRadius: 12,
     border: "1px solid var(--line)",
-    background: "rgba(0,0,0,0.2)",
+    background: "var(--surface-elevated)",
     padding: "0 16px",
     color: "var(--text)",
   },
@@ -398,11 +398,11 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
   },
   error: {
-    color: "#ff6b6b",
-    background: "rgba(255,107,107,0.1)",
+    color: "var(--error-text)",
+    background: "var(--error-bg)",
     padding: "16px 24px",
     borderRadius: 12,
-    border: "1px solid rgba(255,107,107,0.2)",
+    border: "1px solid var(--error-border)",
     margin: 0,
   },
   resultPanel: {
